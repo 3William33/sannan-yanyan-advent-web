@@ -454,3 +454,284 @@
 @media (min-width: 600px) and (orientation: portrait) {
   .adv-wrap { max-width: 560px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   砚砚 × 三三 · 美化补丁 v4
+   修改：
+   1. 横屏两栏对调：左侧房子、右侧操作区（更符合视觉重心）
+   2. 右侧操作区垂直居中、增加呼吸感
+   3. 礼物卡信纸细节：分隔线改为压花纹样、问答区背景加深
+   4. 编辑器浮层：整体内缩、字段间距更均匀
+   5. 夜间模式下按钮和输入框的对比度微调
+   6. 移动端底栏按钮间距和触控区域优化
+════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. 横屏：房子移到左侧，操作区在右侧 ─────────────────────── */
+@media (min-width: 760px) and (orientation: landscape) {
+  .adv-wrap {
+    /* 左列 = 房子（固定宽度），右列 = 操作区（弹性） */
+    grid-template-columns: auto minmax(220px, 1fr);
+    grid-template-rows: auto auto auto 1fr auto auto auto;
+    justify-content: start;
+    align-content: center;
+    align-items: center;
+  }
+
+  /* 房子占右边 → 现在改到左边 col 1 */
+  .adv-stage {
+    grid-column: 1;
+    grid-row: 1 / -1;
+    width: auto;
+    height: min(calc(100dvh - 40px), 880px);
+    display: flex;
+    align-items: center;
+  }
+
+  /* 操作区各行移到右边 col 2 */
+  .adv-wrap > .adv-topbar:nth-child(1) { grid-column: 2; grid-row: 1; padding-left: 4px; }
+  .adv-wrap > .adv-topbar:nth-child(2) { grid-column: 2; grid-row: 2; padding-left: 4px; }
+  .adv-head { grid-column: 2; grid-row: 3; text-align: left; padding: 10px 0 0 4px; }
+  .adv-head h1 { font-size: clamp(36px, 4.2vw, 56px); line-height: 1.1; }
+  .adv-eyebrow { text-align: left; }
+  /* row 4 是弹性空白撑开 */
+  .adv-peeks { grid-column: 2; grid-row: 5; text-align: left; margin-top: 0; padding-left: 4px; }
+  .adv-sync-line { grid-column: 2; grid-row: 6; text-align: left; padding-left: 4px; }
+  .adv-links {
+    grid-column: 2; grid-row: 7;
+    justify-content: flex-start;
+    margin-top: 8px;
+    padding: 10px 0 0 4px;
+    border-top: 1px solid var(--adv-line);
+    gap: 10px;
+  }
+
+  /* 右侧操作区微调：顶栏两行靠近标题，避免上方留白过多 */
+  .adv-wrap > .adv-topbar:nth-child(1) { align-self: end; padding-bottom: 2px; }
+  .adv-wrap > .adv-topbar:nth-child(2) { align-self: start; padding-top: 2px; }
+}
+
+/* ── 2. 礼物卡：分隔线改为压花纹样，问答区加深 ──────────────── */
+.adv-half + .adv-half {
+  border-top: none;
+  position: relative;
+  margin-top: 20px;
+  padding-top: 20px;
+}
+.adv-half + .adv-half::before {
+  content: "· · ·";
+  position: absolute;
+  top: -1px;
+  left: 50%;
+  translate: -50% -50%;
+  font-family: var(--adv-fellsc);
+  font-size: 11px;
+  letter-spacing: .3em;
+  color: var(--adv-muted);
+  background: var(--adv-old);
+  padding: 0 10px;
+}
+
+.adv-q {
+  background: rgba(141, 47, 47, .05);
+  border-left-color: var(--adv-wine);
+}
+.adv-page.dusk .adv-q {
+  background: rgba(141, 47, 47, .1);
+}
+
+/* 小卡片（note）纸胶带装饰改为更细腻的角度 */
+.adv-note {
+  margin-left: auto;
+  margin-right: auto;
+  rotate: -1deg;
+}
+.adv-note::after {
+  rotate: 1.5deg;
+  background: rgba(205, 184, 143, .5);
+  box-shadow: 0 1px 2px rgba(107, 68, 35, .18);
+}
+
+/* 礼物卡底部操作行：关上按钮靠右，提示文字更细 */
+.adv-row {
+  margin-top: 16px;
+  padding-top: 10px;
+  border-top: 1px dotted rgba(107, 68, 35, .22);
+}
+.adv-row .adv-hint:first-child {
+  color: rgba(107, 68, 35, .55);
+  font-size: 11.5px;
+}
+
+/* ── 3. 编辑器浮层：字段分组更清晰 ──────────────────────────── */
+.adv-editor-intro {
+  font-family: var(--adv-fell);
+  font-style: italic;
+  font-size: 13px;
+  color: rgba(107, 68, 35, .72);
+  margin: 8px 0 16px;
+  line-height: 1.8;
+}
+
+/* 字段组之间加一条细分隔 */
+.adv-lab {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dotted rgba(107, 68, 35, .2);
+  color: var(--adv-sepia);
+}
+/* 第一个 lab 不加顶部分隔 */
+.adv-editor-intro + .adv-lab,
+.adv-frame > .adv-lab:first-of-type {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+/* 文件上传区 hover 高亮 */
+.adv-file {
+  transition: border-color .18s ease, background-color .18s ease;
+}
+.adv-file:hover {
+  border-color: rgba(107, 68, 35, .55);
+  background: rgba(255, 250, 238, .55);
+}
+
+/* 录音区加一个轻柔的背景 */
+.adv-rec {
+  background: rgba(255, 250, 238, .3);
+  border-radius: 2px;
+  margin-top: 4px;
+}
+
+/* 编辑器操作行：预览和封好之间加一点间距 */
+.adv-row .adv-btn + .adv-btn {
+  margin-left: 2px;
+}
+
+/* ── 4. 夜间模式细节 ──────────────────────────────────────────── */
+.adv-page.dusk .adv-in1,
+.adv-page.dusk .adv-ta {
+  background: rgba(255, 250, 238, .08);
+  border-color: rgba(205, 184, 143, .3);
+  color: var(--adv-ink);
+}
+.adv-page.dusk .adv-in1:focus,
+.adv-page.dusk .adv-ta:focus {
+  background: rgba(255, 250, 238, .15);
+  border-color: rgba(205, 184, 143, .6);
+}
+.adv-page.dusk .adv-file {
+  border-color: rgba(205, 184, 143, .25);
+  background: rgba(255, 250, 238, .06);
+  color: var(--adv-ink);
+}
+.adv-page.dusk .adv-file::file-selector-button {
+  color: var(--adv-muted);
+  border-color: rgba(205, 184, 143, .25);
+}
+.adv-page.dusk .adv-rec {
+  background: rgba(255, 250, 238, .05);
+}
+.adv-page.dusk .adv-music-preview {
+  border-color: rgba(205, 184, 143, .22);
+  background: rgba(255, 250, 238, .05);
+}
+.adv-page.dusk .adv-half + .adv-half::before {
+  background: #2a1f1a; /* 夜间信纸底色 */
+}
+
+/* ── 5. 移动端底栏细节 ────────────────────────────────────────── */
+@media (max-width: 759px) {
+  .adv-links {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 7px;
+    padding: 10px 8px calc(8px + env(safe-area-inset-bottom, 0px));
+  }
+  /* 追加礼物按钮独占一行，更醒目 */
+  .adv-links .adv-pill.gold {
+    flex-basis: 100%;
+    max-width: 280px;
+    min-height: 42px;
+    font-size: 15px;
+  }
+  /* 其余四个按钮两两成行 */
+  .adv-links .adv-pill:not(.gold) {
+    flex: 1 1 calc(50% - 10px);
+    min-width: 90px;
+    max-width: 140px;
+  }
+}
+
+/* 极窄屏（≤390px）覆盖：三个小按钮挤一行 */
+@media (max-width: 390px) {
+  .adv-links .adv-pill:not(.gold) {
+    flex: 1 1 calc(33% - 8px);
+    min-width: 72px;
+    font-size: 13px;
+    padding-inline: 6px;
+  }
+}
+
+/* ── 6. 存档列表优化 ──────────────────────────────────────────── */
+.adv-list {
+  border-top: 1px solid rgba(107, 68, 35, .18);
+  padding-top: 4px;
+}
+.adv-list li:first-child {
+  color: var(--adv-sepia);
+  font-size: 13px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(107, 68, 35, .18);
+  margin-bottom: 4px;
+}
+.adv-list .ok {
+  font-size: 13px;
+  color: #4a6235;
+  line-height: 1.6;
+}
+.adv-page.dusk .adv-list .ok { color: #7aad5a; }
+
+/* ── 7. 顶栏小按钮组视觉统一 ──────────────────────────────────── */
+.adv-topbar .adv-pill {
+  min-height: 26px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  line-height: 1.2;
+  border-color: rgba(107, 68, 35, .3);
+  color: var(--adv-muted);
+  transition: border-color .18s, color .18s, background-color .18s;
+}
+.adv-topbar .adv-pill:hover {
+  color: var(--adv-sepia);
+  border-color: rgba(107, 68, 35, .55);
+}
+.adv-topbar .adv-pill.gold {
+  color: #211b17;
+  background: rgba(184, 147, 90, .85);
+  border-color: transparent;
+}
+.adv-page.dusk .adv-topbar .adv-pill { border-color: rgba(205, 184, 143, .22); }
+.adv-page.dusk .adv-topbar .adv-pill:hover { border-color: rgba(205, 184, 143, .5); }
+
+/* ── 8. 卡片翻转后背面自然撑高，不裁内容 ─────────────────────── */
+.adv-xcard.flipped .adv-back {
+  overflow: visible;
+  min-height: auto;
+}
+/* 信纸内容区最大高度限制（避免极长内容撑出屏幕太多） */
+.adv-frame {
+  max-height: calc(100dvh - 120px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(107, 68, 35, .3) transparent;
+}
+/* 翻开后不限制高度，让内容自然滚动 */
+.adv-xcard.flipped .adv-back .adv-frame {
+  max-height: none;
+  overflow-y: visible;
+}
