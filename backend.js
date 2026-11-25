@@ -689,6 +689,9 @@ function getBoard() {
     // 未读新礼物只作为独立提示（new_count），不改变 ready/lit 的开启语义。
     const isOpened = save.opened.includes(d);
     const ready = unlocked && !isOpened && hasAny;
+    // 红点只在对应日期解锁后才可能出现：筹备期（含未解锁的未来格）一律不提示，
+    // 既不误报、也不提前泄露「哪天有礼物」。解锁后若远程仍有未读礼物，才亮红点。
+    const new_count = unlocked ? unreadIds.size : 0;
     cells.push({
       day: d,
       owners: ['ai', 'human'],
@@ -697,7 +700,7 @@ function getBoard() {
       opened_by: openedBy,
       hidden,
       gifts: giftsOut,
-      new_count: unreadIds.size,
+      new_count,
       ready,
     });
   }

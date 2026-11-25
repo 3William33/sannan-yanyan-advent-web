@@ -66,12 +66,12 @@ with sync_playwright() as p:
     c6 = next(c for c in b['cells'] if c['day'] == 6)
     check('A1 筹备期第6格 lit=False', c6['lit'] is False, c6)
     check('A2 筹备期第6格 ready=False', c6['ready'] is False, c6)
-    check('A3 第6格新礼物提示独立(new_count>0)', c6['new_count'] > 0, c6['new_count'])
+    check('A3 筹备期第6格无红点(new_count=0)', c6['new_count'] == 0, c6['new_count'])
     open_count = sum(1 for c in b['cells'] if c['opened_by'] and any(c['opened_by'].values()))
     check('A4 顶部已开启计数=0', open_count == 0, open_count)
     st6 = win_state(pg, 6)
     check('A5 第6格窗户未开窗(open=False)', st6 and st6['open'] is False, st6)
-    check('A6 第6格有独立新提示圆点(hasnew)', st6 and st6['hasnew'] is True, st6)
+    check('A6 筹备期第6格无新提示圆点(hasnew=False)', st6 and st6['hasnew'] is False, st6)
     top = pg.locator('#topStars').inner_text()
     check('A7 顶栏显示 ★ 0', top.strip().startswith('★ 0'), top)
     # 所有格子筹备期都不 open
@@ -124,6 +124,8 @@ with sync_playwright() as p:
     check('D2 12月6日第6格 lit 仍为 False(未点开)', c6['lit'] is False, c6['lit'])
     st6 = win_state(pg, 6)
     check('D3 解锁当天 ready=True(可开提示)', st6 and st6['ready'] is True, st6)
+    check('D4 解锁后远程新礼物红点恢复(new_count>0)', c6['new_count'] > 0, c6['new_count'])
+    check('D5 解锁后第6格出现红点(hasnew=True)', st6 and st6['hasnew'] is True, st6)
     ctx.close()
 
     # ══ E. 缓存回退时明确提示（离线）══
