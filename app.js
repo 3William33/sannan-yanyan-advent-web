@@ -8,8 +8,9 @@
  * - data/ 状态保存在浏览器 localStorage，上传媒体暂存 IndexedDB
  */
 
-import { mountHouse, iconSvg } from './house.js';
-import { Backend } from './backend.js';
+/* 版本号与 index.html 保持一致：每次发布同步更新，强制移动 Safari 重新拉取（它缓存较强） */
+import { mountHouse, iconSvg } from './house.js?v=705ecd1';
+import { Backend } from './backend.js?v=705ecd1';
 
 /* ── 常量 ─────────────────────────────────────────────────────────── */
 const TZ = 'Asia/Shanghai';
