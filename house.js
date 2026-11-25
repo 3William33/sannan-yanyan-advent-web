@@ -49,6 +49,9 @@ export function mountHouse(stage, opts) {
   const L = { house: "A snowy red house with 24 windows", pine: "pinecone", bells: "bells", sprite: "the little one sweeping snow",
     day: (d, st) => `Dec ${d}` + (st === "open" ? ", open" : st === "ready" ? ", ready to open" : ", not yet"), ...(opts.labels || {}) };
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // 性能配置：显示模式（白昼/夜间）与流畅模式由 app.js 通过 configure() 注入
+  const perf = { night: false, smooth: false };
+  let snowEnabled = !still;
   const timers = new Set();
   const later = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t; };
   const el = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
@@ -90,23 +93,42 @@ export function mountHouse(stage, opts) {
   });
 
   function set(s) {
-    house.classList.toggle("night", !!s.night);
+    house.classList.toggle("night", perf.night);
     let lit = 0;
     for (const c of s.cells) {
       const b = wins.get(c.day); if (!b) continue;
       if (c.lit) lit++;
+      // open 严格来自 lit（已开启）；ready 仅「今天可开未开」；isNew 只是独立提示，绝不触发开窗
       b.classList.toggle("ai", c.who === "ai");
       b.classList.toggle("human", c.who === "human");
       b.classList.toggle("both", c.who === "both");
       b.classList.toggle("open", !!c.lit);
       b.classList.toggle("ready", !c.lit && !!c.ready);
       b.classList.toggle("today", !c.lit && c.day === s.today);
+      b.classList.toggle("hasnew", !c.lit && !!c.isNew);
       const icon = c.icon || "vide";
       if (b.dataset.icon !== icon) { b.querySelector(".adv-in").innerHTML = `${iconSvg(icon)}<small>${c.day}</small>`; b.dataset.icon = icon; }
       b.setAttribute("aria-label", L.day(c.day, c.lit ? "open" : c.ready ? "ready" : "closed"));
     }
     house.style.setProperty("--lit", (lit / 24).toFixed(3));
     door.classList.toggle("open", !!s.cells.find((c) => c.day === 24 && c.lit));
+  }
+
+  // 由 app.js 注入显示模式与流畅模式；仅在值变化时应用，避免每帧重排
+  function configure(cfg) {
+    if (typeof cfg.night === 'boolean' && cfg.night !== perf.night) {
+      perf.night = cfg.night;
+      house.classList.toggle('night', perf.night);
+    }
+    if (typeof cfg.smooth === 'boolean' && cfg.smooth !== perf.smooth) {
+      perf.smooth = cfg.smooth;
+      house.classList.toggle('smooth', perf.smooth);
+      // 流畅模式降低飘雪密度，并在关闭动效需求时停雪
+      snowEnabled = !still && !perf.smooth;
+      resizeFlakes();
+      if (!snowEnabled) stopSnow();
+      else startSnow();
+    }
   }
 
   // ── 大门：门板是从原图剪下来的两块 ──
@@ -243,7 +265,7 @@ export function mountHouse(stage, opts) {
   const put = (s, i) => { crab.style.bottom = pct(H - SPOTS[s].feet, H); crab.style.left = pct(SPOTS[s].xs[i] - CW / 2, W); };
   put(0, 0);
   function crabWalk() {
-    if (busy || still || document.hidden) return;
+    if (busy || still || perf.smooth || document.hidden) return;
     if (Math.random() < 0.4) {
       busy = true; crab.style.transition = "opacity .35s"; crab.style.opacity = 0;
       later(() => {
@@ -261,29 +283,78 @@ export function mountHouse(stage, opts) {
   crab.onclick = () => crabSay(sprites.happy, 1800);
   crab.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); crab.onclick(); } };
 
-  // ── 雪 ──
-  let flakes = [], raf = 0, alive = true;
+  // ── 雪（性能优化：缓存 ctx/尺寸、DPR 上限、限帧、后台暂停、按视口定粒子数）──
+  const ctx = cv.getContext("2d", { alpha: true });
+  let flakes = [], raf = 0, alive = true, snowRunning = false;
+  let cw = 0, ch = 0, lastFrame = 0;
+  const MAX_DPR = 2;            // iPad Retina 上限，避免 3x 画布过大拖慢合成
+  const TARGET_FPS = 30;        // 飘雪无需 60fps，限帧省电省 GPU
+  const FRAME_MS = 1000 / TARGET_FPS;
+
+  // 按画布面积给出合理粒子数：手机更少、大屏适中；流畅模式减半
+  function flakeCount() {
+    const base = Math.max(14, Math.min(34, Math.round(cw / 12)));
+    return perf.smooth ? Math.max(8, Math.round(base * 0.4)) : base;
+  }
+  function resizeFlakes() {
+    const want = snowEnabled ? flakeCount() : 0;
+    if (flakes.length === want) return;
+    flakes = Array.from({ length: want }, () => ({
+      x: Math.random() * cw, y: Math.random() * ch,
+      r: 0.6 + Math.random() * 1.4, v: 0.2 + Math.random() * 0.45, w: Math.random() * 6,
+    }));
+  }
   function size() {
-    const r = cv.getBoundingClientRect(), dpr = devicePixelRatio || 1;
-    cv.width = r.width * dpr; cv.height = r.height * dpr; cv.getContext("2d").setTransform(dpr, 0, 0, dpr, 0, 0);
-    flakes = Array.from({ length: 46 }, () => ({ x: Math.random() * r.width, y: Math.random() * r.height, r: 0.6 + Math.random() * 1.6, v: 0.2 + Math.random() * 0.5, w: Math.random() * 6 }));
+    const r = house.getBoundingClientRect();
+    cw = r.width; ch = r.height;
+    const dpr = Math.min(devicePixelRatio || 1, MAX_DPR);
+    cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    resizeFlakes();
     skinDoor();
+    // 一帧静态雪（即使限帧/暂停，画布也不会空白）
+    ctx.clearRect(0, 0, cw, ch);
+    ctx.fillStyle = "rgba(255,255,255,.85)";
+    for (const f of flakes) { ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, 7); ctx.fill(); }
   }
-  function tick() {
-    if (!alive) return;
-    const r = cv.getBoundingClientRect(), x = cv.getContext("2d"); x.clearRect(0, 0, r.width, r.height); x.fillStyle = "rgba(255,255,255,.85)";
-    flakes.forEach((f) => { if (!still) { f.y += f.v * snowBoost; f.w += 0.02; f.x += Math.sin(f.w) * 0.3; if (f.y > r.height) { f.y = -4; f.x = Math.random() * r.width; } } x.beginPath(); x.arc(f.x, f.y, f.r, 0, 7); x.fill(); });
-    if (!still) raf = requestAnimationFrame(tick);
+  function tick(ts) {
+    if (!alive || !snowRunning) return;
+    raf = requestAnimationFrame(tick);
+    if (ts - lastFrame < FRAME_MS) return;   // 限帧：跳过多余帧
+    lastFrame = ts;
+    ctx.clearRect(0, 0, cw, ch);             // 用缓存尺寸，不再每帧 getBoundingClientRect（避免强制布局）
+    ctx.fillStyle = "rgba(255,255,255,.85)";
+    for (const f of flakes) {
+      f.y += f.v * snowBoost; f.w += 0.02; f.x += Math.sin(f.w) * 0.3;
+      if (f.y > ch) { f.y = -4; f.x = Math.random() * cw; }
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, 7); ctx.fill();
+    }
   }
+  function startSnow() {
+    if (snowRunning || !alive || !snowEnabled || document.hidden) return;
+    snowRunning = true; lastFrame = 0;
+    raf = requestAnimationFrame(tick);
+  }
+  function stopSnow() {
+    snowRunning = false; cancelAnimationFrame(raf);
+  }
+  // 页面进入后台：停雪、停小家伙走动；返回时恢复（避免后台空耗 GPU / 定时器）
+  const onVisibility = () => {
+    if (document.hidden) { stopSnow(); }
+    else { startSnow(); }
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+
   const ro = new ResizeObserver(size); ro.observe(house);
-  size(); tick();
+  size(); startSnow();
 
   function destroy() {
-    alive = false; cancelAnimationFrame(raf); clearInterval(walkTimer); timers.forEach(clearTimeout); clearTimeout(tt); ro.disconnect();
+    alive = false; stopSnow(); clearInterval(walkTimer); timers.forEach(clearTimeout); clearTimeout(tt); ro.disconnect();
+    document.removeEventListener('visibilitychange', onVisibility);
     [ginger, carrier, biggift, toast].forEach((e) => e.remove());
     stage.innerHTML = ""; stage.classList.remove("adv-stage");
     try { ac && ac.close(); } catch { /* ignore */ }
   }
 
-  return { set, rattle, play, rectOf, say, destroy };
+  return { set, configure, rattle, play, rectOf, say, destroy };
 }

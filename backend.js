@@ -115,6 +115,31 @@ function isNightNow() {
   return h >= 17 || h < 6;
 }
 
+/* 显示模式：auto 按北京时间 17:00–06:00 自动夜间；day 恒白昼；night 恒夜间。
+   与用户设备时区无关，只取决于 Asia/Shanghai。 */
+function effectiveNight() {
+  const mode = save.settings.display;
+  if (mode === 'day') return false;
+  if (mode === 'night') return true;
+  return isNightNow();
+}
+
+function getDisplay() {
+  const m = save.settings.display;
+  return m === 'day' || m === 'night' ? m : 'auto';
+}
+function setDisplay(mode) {
+  save.settings.display = mode === 'day' || mode === 'night' ? mode : 'auto';
+  persist();
+  return getDisplay();
+}
+function getSmooth() { return !!save.settings.smooth; }
+function setSmooth(on) {
+  save.settings.smooth = !!on;
+  persist();
+  return getSmooth();
+}
+
 function todayDay() {
   const p = shanghaiParts();
   const y = parseInt(p.year, 10), m = parseInt(p.month, 10);
@@ -150,7 +175,7 @@ const DEFAULT_SAVE = {
   yanyan_freeze: null,
   scores: {},
   earned_stars: 0,
-  settings: { name: '三三', companion: '砚砚', music: true, who: 'san' },
+  settings: { name: '三三', companion: '砚砚', music: true, who: 'san', display: 'auto', smooth: false },
 };
 
 let save = loadSave();
@@ -421,6 +446,26 @@ function enforceYanyanFreeze(decoded) {
 
 let _syncPromise = null;
 
+/* 把异常归类为可展示的原因，便于区分网络失败 / 解析失败 / API 限制 / 缓存回退 */
+function classifyError(e) {
+  const msg = String((e && e.message) || e || '');
+  if (/abort/i.test(msg)) return { reason: 'timeout', label: '网络超时' };
+  if (/failed to fetch|networkerror|load failed|connection/i.test(msg)) return { reason: 'network', label: '网络不可达' };
+  if (/http 403|http 429|rate limit|abuse/i.test(msg)) return { reason: 'api_limit', label: 'GitHub 接口限流' };
+  if (/http 404/i.test(msg)) return { reason: 'missing', label: '数据文件尚未创建（正常）' };
+  if (/http 5\d\d/i.test(msg)) return { reason: 'server', label: 'GitHub 服务暂时不可用' };
+  if (/json|decode|invalid|payload|shape|unexpected|too large/i.test(msg)) return { reason: 'parse', label: '数据解析失败' };
+  return { reason: 'network', label: '网络或数据异常' };
+}
+
+/* 判断某来源失败时本地是否已有可用缓存（用于区分「缓存回退」与「完全无数据」） */
+function hasRemoteCache() {
+  try {
+    const c = JSON.parse(localStorage.getItem(REMOTE_CACHE_KEY) || 'null');
+    return !!(c && c.yan && c.san && (c.yan.days || c.san.days));
+  } catch { return false; }
+}
+
 async function fetchJson(url, timeoutMs = 12000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -473,6 +518,23 @@ function syncAll() {
   _syncPromise = (async () => {
     const sources = {};
     let ok = 0;
+    const cached = hasRemoteCache();
+
+    const fail = (name, e) => {
+      const c = classifyError(e);
+      // missing（404，尚未创建）是预期的空数据源，不计入「失败」告警
+      if (c.reason === 'missing') {
+        sources[name] = { state: 'empty', reason: c.reason, label: c.label };
+        return;
+      }
+      sources[name] = {
+        state: cached ? 'offline_cache' : 'failed',
+        reason: c.reason,
+        label: c.label,
+        fromCache: cached,
+        error: String((e && e.message) || e || '').slice(0, 240),
+      };
+    };
 
     const giftJobs = [
       ['yanyan_gifts', 'gifts.json', YAN_DIGEST, 'yan'],
@@ -489,9 +551,7 @@ function syncAll() {
         remoteData[who] = decoded;
         sources[name] = { state: 'succeeded', count: Object.values(decoded.days).reduce((n, x) => n + x.length, 0) };
         ok++;
-      } catch (e) {
-        sources[name] = { state: 'offline_cache', error: String(e.message || e).slice(0, 240) };
-      }
+      } catch (e) { fail(name, e); }
     }
 
     const indexJobs = [
@@ -504,9 +564,7 @@ function syncAll() {
         remoteIndexes[who] = idx;
         sources[name] = { state: 'succeeded' };
         ok++;
-      } catch (e) {
-        sources[name] = { state: 'offline_cache', error: String(e.message || e).slice(0, 240) };
-      }
+      } catch (e) { fail(name, e); }
     }
 
     try {
@@ -516,18 +574,29 @@ function syncAll() {
       persist();
       sources.peek_log = { state: 'succeeded', count: save.peek_log.length };
       ok++;
-    } catch (e) {
-      sources.peek_log = { state: 'offline_cache', error: String(e.message || e).slice(0, 240) };
-    }
+    } catch (e) { fail('peek_log', e); }
 
-    const state = ok === 5 ? 'succeeded' : ok === 0 ? 'offline_cache' : 'partial';
+    // 统计：成功 / 预期为空 / 缓存回退 / 真正失败
+    const entries = Object.values(sources);
+    const failed = entries.filter(s => s.state === 'failed' || s.state === 'offline_cache');
+    const fromCache = entries.filter(s => s.state === 'offline_cache');
+    const state = failed.length === 0 ? 'succeeded' : (ok === 0 ? 'offline_cache' : 'partial');
+    let message = '同步完成';
+    if (state === 'offline_cache') message = fromCache.length ? '全部来源离线，正在使用本地缓存' : '暂时无法获取远程数据';
+    else if (state === 'partial') {
+      const labels = [...new Set(failed.map(s => s.label))].join('、');
+      message = fromCache.length ? `部分来源离线（${labels}）· 已用缓存` : `部分来源失败（${labels}）`;
+    }
     syncState = {
       state,
-      message: state === 'succeeded' ? '同步完成' : '部分来源使用离线缓存',
+      message,
+      okCount: ok,
+      failedCount: failed.length,
+      fromCacheCount: fromCache.length,
       sources,
       finished_at: shanghaiNowIso(),
     };
-    writeRemoteCache();
+    if (ok > 0) writeRemoteCache();
     _syncPromise = null;
     return { ...syncState };
   })();
@@ -613,7 +682,13 @@ function getBoard() {
 
     const unreadIds = new Set([...yanIds, ...[...sanIds].filter(id => !localIds.has(id))].filter(id => !seenRemote.has(id)));
     const hasAny = hidden.ai || hidden.human;
-    const lit = unreadIds.size > 0 || save.opened.includes(d) || (unlocked && hasAny);
+    // lit 严格表示「已开启」——与 opened_by / 顶部已开启计数完全同源。
+    // 「有新礼物未读」绝不并入 lit（否则筹备期会误触发开窗动画与亮灯）。
+    const lit = save.opened.includes(d);
+    // ready 表示「今天可以开但还没开」，必须是已解锁、有内容、且未开启。
+    // 未读新礼物只作为独立提示（new_count），不改变 ready/lit 的开启语义。
+    const isOpened = save.opened.includes(d);
+    const ready = unlocked && !isOpened && hasAny;
     cells.push({
       day: d,
       owners: ['ai', 'human'],
@@ -623,14 +698,16 @@ function getBoard() {
       hidden,
       gifts: giftsOut,
       new_count: unreadIds.size,
-      ready: unlocked && (unreadIds.size > 0 || (hasAny && !save.opened.includes(d))),
+      ready,
     });
   }
 
   return {
     today,
     hour: parseInt(shanghaiParts().hour, 10),
-    night: isNightNow(),
+    night: effectiveNight(),
+    display: getDisplay(),
+    smooth: getSmooth(),
     peeks: counts.san + counts.yan,
     peek_counts: counts,
     peek_events: events,
@@ -1075,5 +1152,10 @@ export const Backend = {
   hasPat,
   getWho,
   setWho,
+  getDisplay,
+  setDisplay,
+  getSmooth,
+  setSmooth,
+  isNight: effectiveNight,
   shanghaiNowIso,
 };
