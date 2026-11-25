@@ -16,12 +16,9 @@ const TZ = 'Asia/Shanghai';
 const YEAR = 2026;
 
 /* ── 时间工具 ─────────────────────────────────────────────────────── */
-function localNow() {
-  return new Date(new Date().toLocaleString('en-US', { timeZone: TZ }));
-}
+// 夜间判断统一由 backend 按 Asia/Shanghai + 显示模式计算，避免设备时区差异与重复逻辑
 function isNight() {
-  const h = localNow().getHours();
-  return h >= 17 || h < 6;
+  try { return Backend.isNight(); } catch { return false; }
 }
 
 /* ── Toast ───────────────────────────────────────────────────────── */
@@ -66,36 +63,69 @@ function mountStage() {
 function refresh() {
   if (!board || !houseCtrl) return;
 
-  const { today, night, peeks, peek_counts: peekCounts = {}, cells } = board;
+  const { today, night, display, smooth, peeks, peek_counts: peekCounts = {}, cells, sync } = board;
 
-  // 顶栏
+  // 顶栏：已开启数量严格以 opened_by 为准（与格子亮灯同源，杜绝「亮灯但计数0」）
   document.getElementById('topDay').textContent = today || '—';
   const opened = cells.filter(c => Object.values(c.opened_by || {}).length > 0).length;
-  const stars = cells.filter(c => c.gifts?.ai?.answer === '__star__').length; // 占位，以后扩展
   document.getElementById('topStars').textContent = `★ ${opened} · 三三 ${peekCounts.san || 0} / 砚砚 ${peekCounts.yan || 0}`;
 
   // 偷看提示
   const peekEl = document.getElementById('peekLine');
   peekEl.textContent = peeks > 0 ? `泡芙记下了 ${peeks} 次偷看：三三 ${peekCounts.san || 0}，砚砚 ${peekCounts.yan || 0}。` : '';
 
-  // 夜间模式
-  document.getElementById('page').classList.toggle('dusk', night);
+  // 显示模式（自动 / 白昼 / 夜间）与流畅模式：统一作用于页面与房子
+  const page = document.getElementById('page');
+  page.classList.toggle('dusk', night);
+  page.classList.toggle('adv-smooth', !!smooth);
+  applyDisplayButton(display);
+  applySmoothButton(smooth);
+  houseCtrl.configure({ night: !!night, smooth: !!smooth });
 
-  // 渲染 house
-  const litCount = cells.filter(c => c.lit).length;
+  // 渲染 house：lit 严格 = 已开启（backend 已保证），ready = 今天可开未开；新增礼物只走 new_count 提示
   houseCtrl.set({
     today,
-    night,
-    litRatio: litCount / 24,
+    night: !!night,
     cells: cells.map(c => ({
       day: c.day,
-      open: c.open && Object.values(c.opened_by || {}).length > 0,
-      ready: Boolean(c.ready),
       lit: c.lit,
+      ready: Boolean(c.ready),
+      isNew: (c.new_count || 0) > 0,
       who: (c.hidden?.ai && c.hidden?.human) ? 'both' : c.hidden?.human ? 'human' : c.hidden?.ai ? 'ai' : null,
       hidden: c.hidden,
     })),
   });
+
+  // 同步状态栏：使用后端给出的明确原因，而非笼统的「部分离线缓存」
+  applySyncStatus(sync);
+}
+
+/* ── 显示模式 / 流畅模式 / 同步状态 ─────────────────────────────── */
+const DISPLAY_LABEL = { auto: '☾ 自动', day: '☀ 白昼', night: '✦ 夜间' };
+function applyDisplayButton(display) {
+  const btn = document.getElementById('displayBtn');
+  if (!btn) return;
+  btn.textContent = DISPLAY_LABEL[display] || DISPLAY_LABEL.auto;
+  btn.dataset.mode = display || 'auto';
+}
+function applySmoothButton(smooth) {
+  const btn = document.getElementById('smoothBtn');
+  if (!btn) return;
+  btn.textContent = smooth ? '⚡ 流畅 · 开' : '⚡ 流畅 · 关';
+  btn.classList.toggle('gold', !!smooth);
+}
+function applySyncStatus(sync) {
+  const el = document.getElementById('syncLine');
+  if (!el) return;
+  if (!sync || !sync.state || sync.state === 'idle') { el.textContent = '尚未同步'; el.removeAttribute('title'); return; }
+  if (sync.state === 'syncing') { el.textContent = '正在同步…'; el.removeAttribute('title'); return; }
+  let stamp = '';
+  try { if (sync.finished_at) stamp = new Date(sync.finished_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); } catch { /* ignore */ }
+  const prefix = sync.state === 'succeeded' ? '已同步' : sync.state === 'partial' ? '部分离线' : '离线缓存';
+  el.textContent = `${prefix} · ${sync.message || ''}${stamp ? ' · ' + stamp : ''}`;
+  const src = sync.sources || {};
+  const details = Object.entries(src).map(([k, v]) => `${k}：${v.label || v.state}`).join('\n');
+  if (details) el.title = details; else el.removeAttribute('title');
 }
 
 /* ── 身份记名（偷看事件归属）────────────────────────────────────── */
@@ -119,17 +149,13 @@ let _syncLock = false;
 async function syncRemote() {
   if (_syncLock) return;
   _syncLock = true;
-  document.getElementById('syncLine').textContent = '正在同步…';
+  applySyncStatus({ state: 'syncing' });
   try {
-    const state = await Backend.sync();
+    await Backend.sync();            // Backend 内部有并发锁；失败来源已带明确原因
     board = Backend.getBoard();
-    refresh();
-    const stamp = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    if (state.state === 'succeeded') document.getElementById('syncLine').textContent = `已同步 · ${stamp}`;
-    else if (state.state === 'partial' || state.state === 'offline_cache') document.getElementById('syncLine').textContent = `部分离线缓存 · ${stamp}`;
-    else throw new Error(state.message || '同步失败');
+    refresh();                        // refresh 会调用 applySyncStatus 展示明确状态
   } catch (e) {
-    document.getElementById('syncLine').textContent = '同步失败 · 使用离线缓存';
+    applySyncStatus({ state: 'offline_cache', message: '同步失败：' + (e.message || '未知错误') });
     toast(e.message || '同步失败');
   } finally {
     _syncLock = false;
@@ -518,7 +544,9 @@ async function openEditor(defaultDay) {
   dayIn.type = 'number';
   dayIn.min = 1;
   dayIn.max = 25;
-  dayIn.value = defaultDay || (localNow().getMonth() === 11 ? localNow().getDate() : 1);
+  // 默认日期按北京时间：12 月取当日，否则取 1（与解锁规则同源）
+  const bj = Backend.shanghaiNowIso();
+  dayIn.value = defaultDay || (bj.slice(5, 7) === '12' ? parseInt(bj.slice(8, 10), 10) : 1);
   dayIn.style.marginBottom = '10px';
   frame.appendChild(dayIn);
 
@@ -963,11 +991,38 @@ document.addEventListener('DOMContentLoaded', async () => {
       toast(Backend.getWho() === 'yan' ? '泡芙会把她提前开窗的事记在砚砚名下' : '泡芙会把你提前开窗的事记在三三名下');
     };
   }
+  // 显示模式：自动 → 白昼 → 夜间 → 自动 循环
+  const displayBtn = document.getElementById('displayBtn');
+  if (displayBtn) {
+    displayBtn.onclick = () => {
+      const order = ['auto', 'day', 'night'];
+      const cur = Backend.getDisplay();
+      const next = order[(order.indexOf(cur) + 1) % order.length];
+      Backend.setDisplay(next);
+      loadBoard();  // 重算 night 并刷新模式按钮
+      toast(next === 'auto' ? '显示模式：自动（按北京时间）' : next === 'day' ? '显示模式：白昼' : '显示模式：夜间');
+    };
+  }
+
+  // 流畅模式：降低非必要动效，保留全部美术资源
+  const smoothBtn = document.getElementById('smoothBtn');
+  if (smoothBtn) {
+    smoothBtn.onclick = () => {
+      const on = !Backend.getSmooth();
+      Backend.setSmooth(on);
+      loadBoard();
+      toast(on ? '流畅模式已开启 · 减少动画与特效' : '流畅模式已关闭 · 恢复完整动效');
+    };
+  }
+
   await loadBoard();
   syncRemote();
 
-  // 每分钟更新夜间模式
+  // 每分钟按北京时间 + 显示模式刷新夜间状态（不再用设备本地时区）
   setInterval(() => {
-    document.getElementById('page').classList.toggle('dusk', isNight());
+    if (!board) return;
+    const night = isNight();
+    document.getElementById('page').classList.toggle('dusk', night);
+    houseCtrl?.configure({ night, smooth: Backend.getSmooth() });
   }, 60_000);
 });

@@ -14,7 +14,7 @@
   position: fixed; inset: 0; z-index: 50; overflow-y: auto; -webkit-overflow-scrolling: touch;
   background: var(--adv-paper); color: var(--adv-ink); font-family: var(--adv-cn);
 }
-.adv-page.dusk { --adv-paper: #211b17; --adv-ink: #eadfc8; --adv-muted: #a89a86; --adv-line: #4a3f34; }
+.adv-page.dusk { --adv-paper: #2e2621; --adv-ink: #f2e7d0; --adv-muted: #b9ab95; --adv-line: #574a3c; }
 .adv-wrap { max-width: 430px; margin: 0 auto; padding-block: calc(10px + env(safe-area-inset-top, 0px)) 40px;
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); position: relative; }
 .adv-nav { display: flex; justify-content: space-between; align-items: center; min-height: 34px; }
@@ -75,17 +75,21 @@
 @keyframes adv-rl { 30% { transform: rotateY(-14deg) } 60% { transform: rotateY(-4deg) } }
 @keyframes adv-rr { 30% { transform: rotateY(14deg) } 60% { transform: rotateY(4deg) } }
 
-/* 夜里（当地 17:00–6:00 / at night, local time）：楼暗下来，没开的窗是黑的，开过的窗透暖光；开得越多楼越亮 */
+/* 夜里（按北京时间 17:00–06:00，可用顶部按钮切白昼/自动）：保留氛围但提高可见度。
+   注意：夜间遮罩与压暗全部走 --night-* 变量，流畅模式下进一步减弱，减少重绘。 */
+.adv-house { --night-veil: .34; --night-base: .82; --night-leaf: .72; --night-plaque: .82; }
 .adv-veil, .adv-litall { position: absolute; inset: 0; border-radius: 6px; pointer-events: none; opacity: 0; transition: opacity .8s; }
-.adv-veil { z-index: 1; background: linear-gradient(rgba(14, 22, 62, .62), rgba(8, 12, 38, .55)); mix-blend-mode: multiply; }
-.adv-litall { z-index: 1; background: radial-gradient(ellipse at 50% 52%, rgba(255, 190, 90, .55), rgba(255, 170, 60, 0) 62%); mix-blend-mode: screen; }
-.adv-house.night .adv-veil { opacity: 1; }
+.adv-veil { z-index: 1; background: linear-gradient(rgba(20, 30, 72, .52), rgba(12, 18, 46, .46)); }
+.adv-litall { z-index: 1; background: radial-gradient(ellipse at 50% 52%, rgba(255, 190, 90, .42), rgba(255, 170, 60, 0) 62%); }
+.adv-house.night .adv-veil { opacity: var(--night-veil); }
 .adv-house.night .adv-litall { opacity: var(--lit, 0); }
-.adv-house.night .adv-base { filter: brightness(.62) saturate(.8); }
-.adv-house.night .adv-leaf { filter: brightness(.42) saturate(.7); }
-.adv-house.night .adv-win:not(.today):not(.ready) .adv-plaque { filter: brightness(.5); }
-.adv-house.night .adv-win.open .adv-in { background: radial-gradient(ellipse at 50% 55%, #fff1c4, #ffcf73 55%, #e59a3a); box-shadow: 0 0 10px 3px rgba(255, 190, 90, .75), 0 0 28px 10px rgba(255, 165, 60, .32); }
-.adv-house.night .adv-crab { filter: brightness(.75); }
+.adv-house.night .adv-base { filter: brightness(var(--night-base)) saturate(.9); }
+.adv-house.night .adv-leaf { filter: brightness(var(--night-leaf)) saturate(.85); }
+.adv-house.night .adv-win:not(.today):not(.ready) .adv-plaque { filter: brightness(var(--night-plaque)); }
+.adv-house.night .adv-win.open .adv-in { background: radial-gradient(ellipse at 50% 55%, #fff1c4, #ffcf73 55%, #e59a3a); box-shadow: 0 0 8px 2px rgba(255, 190, 90, .6); }
+.adv-house.night .adv-crab { filter: brightness(.85); }
+/* 白昼模式（display=day）：即便设备处于夜间也保证房子与日期牌清晰 */
+.adv-page:not(.dusk) .adv-house .adv-veil { opacity: 0 !important; }
 
 /* 24 号的大门 */
 .adv-door { position: absolute; z-index: 1; perspective: 520px; overflow: hidden; border-radius: 50% 50% 0 0/20% 20% 0 0; pointer-events: none; }
@@ -377,4 +381,31 @@
 @media (prefers-reduced-motion: reduce) {
   .adv-pill, .adv-in1, .adv-ta { transition: none; }
   .adv-rec-dot { animation: none !important; }
+}
+
+/* ── 新增礼物独立提示：只在日期牌角上点一颗小星，不改变「开窗/已开启」视觉 ── */
+.adv-win.hasnew:not(.open) .adv-plaque::after {
+  content: ""; position: absolute; right: -2px; top: -2px; width: 9px; height: 9px; border-radius: 50%;
+  background: #c0392b; border: 1px solid #fff3d6; box-shadow: 0 0 0 1px rgba(141,47,47,.35);
+}
+
+/* ── 流畅模式：保留全部素材与配色，仅降低非必要动效与昂贵合成 ── */
+.adv-smooth .adv-win.today .adv-plaque,
+.adv-smooth .adv-pine .adv-hang,
+.adv-smooth .adv-bells .adv-hang,
+.adv-smooth .adv-rec-dot { animation: none !important; }
+.adv-smooth .adv-house .adv-veil { transition: none; }
+/* 夜间流畅模式：进一步减弱压暗，去掉发光阴影，避免大面积重绘 */
+.adv-house.smooth { --night-veil: .18; --night-base: .92; --night-leaf: .85; --night-plaque: .92; }
+.adv-house.smooth.night .adv-win.open .adv-in { box-shadow: none; }
+/* drop-shadow / filter 是 iPad Safari 常见卡顿源，流畅模式下关闭装饰投影 */
+.adv-smooth .adv-stk img,
+.adv-smooth .adv-fly img,
+.adv-smooth .adv-flybox svg,
+.adv-smooth .adv-biggift svg,
+.adv-smooth .adv-front .fseal { filter: none !important; }
+.adv-smooth .adv-base { box-shadow: none; }
+.adv-smooth .adv-crab { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .adv-win.hasnew:not(.open) .adv-plaque::after { box-shadow: none; }
 }
