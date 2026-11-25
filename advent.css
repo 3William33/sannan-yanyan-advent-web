@@ -409,3 +409,48 @@
 @media (prefers-reduced-motion: reduce) {
   .adv-win.hasnew:not(.open) .adv-plaque::after { box-shadow: none; }
 }
+
+/* ── 横屏 iPad / 桌面端：两栏布局 ─────────────────────────────────
+   竖屏手机维持原样（上方标题 + 中央房子 + 下方操作）；
+   横屏和宽屏时房子按「视口高度」定尺寸（竖版房子不能用宽度撑满），
+   左侧放顶栏/标题/提示/操作，避免窄条居中与窗户被挤出视口。 */
+@media (min-width: 760px) and (orientation: landscape) {
+  .adv-wrap {
+    max-width: 1180px;
+    min-height: 100dvh;
+    display: grid;
+    grid-template-columns: minmax(240px, 1fr) auto;
+    grid-template-rows: auto auto auto 1fr auto auto auto;
+    column-gap: clamp(24px, 5vw, 72px);
+    align-content: center;
+    align-items: center;
+    padding-block: clamp(10px, 2vh, 20px);
+    box-sizing: border-box;
+  }
+  /* 横屏左列压紧间距，保证顶栏到操作按钮的总高不超过视口 */
+  /* 顶栏信息聚合到左侧，别在宽栏里被 space-between 拉散 */
+  .adv-wrap > .adv-topbar { justify-content: flex-start; gap: 18px; margin-bottom: 0; }
+  .adv-head { padding-top: 2px; }
+  .adv-peeks { margin-top: 0; line-height: 1.3; }
+  .adv-sync-line { margin-top: 2px; }
+  .adv-wrap > .adv-topbar:nth-child(1) { grid-column: 1; grid-row: 1; }
+  .adv-wrap > .adv-topbar:nth-child(2) { grid-column: 1; grid-row: 2; }
+  .adv-head { grid-column: 1; grid-row: 3; text-align: left; padding: 6px 0 0; }
+  .adv-head h1 { font-size: clamp(34px, 4vw, 52px); }
+  .adv-peeks { grid-column: 1; grid-row: 5; text-align: left; margin-top: 0; }
+  .adv-sync-line { grid-column: 1; grid-row: 6; text-align: left; }
+  .adv-links { grid-column: 1; grid-row: 7; justify-content: flex-start; margin-top: 6px; padding: 0; gap: 10px; border-top: 0; }
+  .adv-stage { grid-column: 2; grid-row: 1 / -1; width: auto; height: min(calc(100dvh - 40px), 880px); }
+  .adv-house { width: auto; height: 100%; aspect-ratio: 1024 / 1536; }
+  /* 横屏高度紧张：屋檐装饰收一收，别把顶部挤出屏幕 */
+  .adv-pine { top: -70px; scale: .82; transform-origin: 50% 100%; }
+  .adv-bells { top: -8px; scale: .88; transform-origin: 70% 0; }
+  /* 宽屏卡片放大一点，阅读/编辑更从容；浮层仍居中滚动 */
+  .adv-cardbox { width: min(420px, 92vw); }
+  .adv-sheet { width: min(440px, 94vw); }
+}
+
+/* 竖屏大屏（如 768×1024 的 iPad）：单栏居中，适度放大房子，别一直停在 430px */
+@media (min-width: 600px) and (orientation: portrait) {
+  .adv-wrap { max-width: 560px; }
+}
