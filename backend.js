@@ -20,8 +20,8 @@
  *   - 解锁规则是客户端交互层限制（与原版本机运行一致），并非服务器端安全边界
  */
 
-import { CONFIG, UPLOAD_MIME_EXT, REMOTE_MEDIA_EXTENSIONS, MAX_UPLOAD_BYTES } from './config.js';
-import { BUILTIN_DAYS } from './builtin-gifts.js';
+import { CONFIG, UPLOAD_MIME_EXT, REMOTE_MEDIA_EXTENSIONS, MAX_UPLOAD_BYTES } from './config.js?v=705ecd1';
+import { BUILTIN_DAYS } from './builtin-gifts.js?v=705ecd1';
 
 /* ── 编解码工具（与 advent-gifts-v3.2 协议一致）────────────────────── */
 

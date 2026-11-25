@@ -310,7 +310,7 @@ function loadAbcjs(cb) {
   if (_abcjsCallbacks.length > 1) return; // 已经在加载
 
   const script = document.createElement('script');
-  script.src = 'vendor/abcjs-basic-min.js';
+  script.src = 'vendor/abcjs-basic-min.js?v=705ecd1';
   script.onload = () => {
     _abcjsReady = true;
     _abcjsCallbacks.forEach(fn => fn());
