@@ -735,3 +735,41 @@
   max-height: none;
   overflow-y: visible;
 }
+
+/* ═══ V4 圣诞书桌 ═══ */
+.adv-desk { display:none; }
+@media (min-width:760px) and (orientation:landscape) {
+  .adv-desk { grid-column:2; grid-row:4; display:flex; position:relative; flex-direction:column; align-self:stretch; min-width:0; min-height:260px; padding:18px clamp(16px,2.4vw,32px); color:var(--adv-ink); background:linear-gradient(135deg,rgba(255,250,238,.72),rgba(221,198,157,.38)); border:1px solid rgba(107,68,35,.25); box-shadow:0 14px 30px -24px rgba(40,20,10,.8), inset 0 0 0 5px rgba(255,250,238,.22); overflow:hidden; }
+  .adv-desk::before { content:""; position:absolute; inset:10px; border:1px dashed rgba(107,68,35,.22); pointer-events:none; }
+  .adv-desk-top,.adv-desk-calendar,.adv-desk-grid,.adv-desk-bottom { position:relative; z-index:1; }
+  .adv-desk-top { display:flex; justify-content:space-between; align-items:baseline; border-bottom:1px solid rgba(107,68,35,.22); padding-bottom:8px; }
+  .adv-desk-label { font:italic 17px var(--adv-fell); color:var(--adv-sepia); }
+  .adv-desk-date { font-size:11px; color:var(--adv-muted); }
+  .adv-desk-calendar { display:flex; align-items:center; gap:12px; padding:12px 0 10px; }
+  .adv-desk-calendar-day { font:32px var(--adv-fell); color:var(--adv-wine); }
+  .adv-desk-calendar b,.adv-desk-calendar small { display:block; }
+  .adv-desk-calendar b { font-size:13px; font-weight:400; }
+  .adv-desk-calendar small { color:var(--adv-muted); font-size:11px; margin-top:3px; }
+  .adv-desk-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+  .adv-desk-object { min-height:72px; display:grid; grid-template-columns:32px 1fr; grid-template-rows:auto auto; column-gap:8px; align-items:center; text-align:left; padding:9px; color:var(--adv-ink); border:1px solid rgba(107,68,35,.24); background:rgba(255,250,238,.48); box-shadow:2px 3px 0 rgba(107,68,35,.08); cursor:pointer; font:inherit; }
+  .adv-desk-object:hover,.adv-desk-drawer:hover,.adv-desk-pen:hover { border-color:var(--adv-gold); transform:translateY(-1px); }
+  .adv-object-mark,.adv-object-photo { grid-row:1 / span 2; display:grid; place-items:center; width:28px; height:34px; color:var(--adv-wine); font-size:23px; }
+  .adv-object-photo { border:1px solid var(--adv-gold); background:#f9f0d8; transform:rotate(-4deg); font-size:19px; }
+  .adv-desk-object b { font-size:12px; font-weight:400; }
+  .adv-desk-object small { color:var(--adv-muted); font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .adv-desk-bottom { display:flex; gap:8px; margin-top:auto; padding-top:12px; }
+  .adv-desk-drawer,.adv-desk-pen { flex:1; padding:9px; text-align:left; color:var(--adv-sepia); border:1px solid rgba(107,68,35,.3); background:rgba(184,147,90,.14); cursor:pointer; font:13px var(--adv-cn); }
+  .adv-desk-drawer span { display:block; color:var(--adv-muted); font-size:10px; margin-top:3px; }
+  .adv-desk-pen { color:var(--adv-wine); }
+  .adv-puff { position:absolute; right:15px; bottom:7px; font-size:20px; opacity:.8; animation:adv-puff-breathe 3.8s ease-in-out infinite; }
+  @keyframes adv-puff-breathe { 50% { transform:translateY(-2px) scale(1.04, .98); } }
+  .adv-zoom { left:55%; padding:clamp(16px,2vw,28px); background:rgba(25,15,8,.08); }
+  .adv-zoom.on { background:rgba(25,15,8,.08); }
+  .adv-zoom > * { margin:0 auto; }
+}
+@media (min-width:760px) and (orientation:landscape) and (max-height:700px) {
+  .adv-desk { padding-block:12px; }
+  .adv-desk-calendar { padding-block:7px; }
+  .adv-desk-object { min-height:61px; }
+}
+@media (prefers-reduced-motion:reduce) { .adv-puff { animation:none; } .adv-desk-object:hover,.adv-desk-drawer:hover,.adv-desk-pen:hover { transform:none; } }

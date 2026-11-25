@@ -71,6 +71,19 @@ function refresh() {
   const opened = cells.filter(c => Object.values(c.opened_by || {}).length > 0).length;
   document.getElementById('topStars').textContent = `★ ${opened} · 三三 ${peekCounts.san || 0} / 砚砚 ${peekCounts.yan || 0}`;
 
+  // 书桌默认态：不改变旧协议，只把已有看板信息投影成实体物件
+  const deskDay = document.getElementById('deskDay');
+  const deskDate = document.getElementById('deskDate');
+  const deskCountdown = document.getElementById('deskCountdown');
+  const deskMailStatus = document.getElementById('deskMailStatus');
+  if (deskDay) deskDay.textContent = today || '—';
+  if (deskDate) deskDate.textContent = today ? `12 月 ${today} 日 · 北京时间` : '十二月 · 北京时间';
+  if (deskCountdown) deskCountdown.textContent = today ? (today >= 25 ? '圣诞快乐，今天也有信' : `距离圣诞还有 ${Math.max(0, 25 - today)} 天`) : '等候十二月的雪';
+  if (deskMailStatus) {
+    const incoming = cells.reduce((n, c) => n + (c.new_count || 0), 0);
+    deskMailStatus.textContent = incoming ? `${incoming} 件新礼物 / 追加礼物` : `${opened} 扇窗已点亮`;
+  }
+
   // 偷看提示
   const peekEl = document.getElementById('peekLine');
   peekEl.textContent = peeks > 0 ? `泡芙记下了 ${peeks} 次偷看：三三 ${peekCounts.san || 0}，砚砚 ${peekCounts.yan || 0}。` : '';
@@ -1073,6 +1086,18 @@ window.Backend = Backend; // 供测试与排查使用（不含任何敏感信息
 document.addEventListener('DOMContentLoaded', async () => {
   mountStage();
   Backend.init();
+  const deskWrite = document.getElementById('deskWrite');
+  const deskDiary = document.getElementById('deskDiary');
+  const deskMail = document.getElementById('deskMail');
+  const deskRecord = document.getElementById('deskRecord');
+  if (deskWrite) deskWrite.onclick = () => UI.openEditor();
+  if (deskDiary) deskDiary.onclick = () => UI.openEditor();
+  if (deskMail) deskMail.onclick = () => UI.showArchive();
+  if (deskRecord) deskRecord.onclick = () => {
+    const audio = document.querySelector('audio');
+    if (audio) audio.paused ? audio.play().catch(() => toast('请再次点击唱片机开始播放')) : audio.pause();
+    else toast('唱片机已准备好：打开一份音乐礼物后可继续播放');
+  };
   refreshWhoBtn();
   const whoBtn = document.getElementById('whoBtn');
   if (whoBtn) {

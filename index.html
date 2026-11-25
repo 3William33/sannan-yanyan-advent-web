@@ -91,6 +91,29 @@
     <!-- 房子舞台（house.js 挂载点） -->
     <div class="adv-stage" id="stage"></div>
 
+    <!-- 圣诞书桌：普通操作在这里发生，礼物遮罩只保留给真正的沉浸式场景 -->
+    <section class="adv-desk" id="desk" aria-label="圣诞书桌">
+      <div class="adv-desk-top">
+        <span class="adv-desk-label">Christmas desk</span>
+        <span class="adv-desk-date" id="deskDate">12 月 · 北京时间</span>
+      </div>
+      <div class="adv-desk-calendar">
+        <span class="adv-desk-calendar-day" id="deskDay">—</span>
+        <span><b>圣诞日历</b><small id="deskCountdown">等候十二月的雪</small></span>
+      </div>
+      <div class="adv-desk-grid">
+        <button class="adv-desk-object adv-mail" id="deskMail" type="button"><span class="adv-object-mark">✉</span><b>圣诞邮局</b><small id="deskMailStatus">等待新信件</small></button>
+        <button class="adv-desk-object adv-frame-object" id="deskPhoto" type="button"><span class="adv-object-photo">♡</span><b>桌面相框</b><small>翻看我们的照片</small></button>
+        <button class="adv-desk-object adv-note-object" id="deskNote" type="button"><span class="adv-object-mark">✎</span><b>今日便签</b><small>留一句冬日的话</small></button>
+        <button class="adv-desk-object adv-record" id="deskRecord" type="button"><span class="adv-object-mark">♫</span><b>圣诞唱片机</b><small>点击播放背景音乐</small></button>
+      </div>
+      <div class="adv-desk-bottom">
+        <button class="adv-desk-drawer" id="deskDiary" type="button">▱ 手账抽屉 <span>贴纸 · 信纸 · 草稿</span></button>
+        <button class="adv-desk-pen" id="deskWrite" type="button">✎ 写信 / 塞一份礼物</button>
+      </div>
+      <div class="adv-puff" aria-hidden="true">🐶</div>
+    </section>
+
     <!-- 偷看提示 -->
     <div class="adv-peeks" id="peekLine"></div>
 

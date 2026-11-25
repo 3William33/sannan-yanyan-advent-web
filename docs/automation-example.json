@@ -1,0 +1,3 @@
+{
+  "protocol": "advent-gifts-v3.2",
+  "days": {"7": [{"id":"comic-2026-07","kind":"comic","comic":{"mode":"pages","pages":[{"url":"https://raw.githubusercontent.com/3William33/sannan-yanyan-advent-2026/main/assets/comics/example.webp","alt":"测试绘本"}]},"items_v2":[{"type":"text","text":"一页冬天的小故事"}],"editor_version":1}]}
