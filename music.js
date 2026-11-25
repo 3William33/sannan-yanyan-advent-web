@@ -72,6 +72,90 @@ function detectMusicType(url) {
   return null;
 }
 
+/* ── 歌曲元数据（歌名/歌手/封面）多源降级 ─────────────────────────────
+   静态网页没有服务端代理，跨域抓取可能失败；所有抓取都带超时并静默降级，
+   编辑器里手填的 name/artist/cover 始终优先。抓不到就用克制的占位黑胶。 */
+
+const _metaCache = new Map();
+
+function _timeout(ms) {
+  return new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
+}
+
+/** 网易云：尝试详情接口取歌名/歌手/封面；失败返回 null（不缓存失败） */
+async function fetchNeteaseMeta(songId) {
+  const key = `netease:${songId}`;
+  if (_metaCache.has(key)) return _metaCache.get(key);
+  let meta = null;
+  try {
+    const res = await Promise.race([
+      fetch(`https://music.163.com/api/song/detail?ids=${encodeURIComponent('[' + songId + ']')}`, { cache: 'force-cache' }),
+      _timeout(4500),
+    ]);
+    if (res && res.ok) {
+      const data = await res.json();
+      const song = (data.songs && data.songs[0]) || null;
+      if (song) {
+        meta = {
+          title: song.name || '',
+          artist: (song.artists || []).map(a => a.name).filter(Boolean).join(' / '),
+          cover: (song.album && song.album.picUrl) || '',
+        };
+      }
+    }
+  } catch (_) { /* 跨域/超时：降级 */ }
+  _metaCache.set(key, meta);
+  return meta;
+}
+
+/** Spotify：尝试公开 oEmbed 取歌名/歌手/封面；失败返回 null */
+async function fetchSpotifyMeta(url) {
+  const key = `spotify:${url}`;
+  if (_metaCache.has(key)) return _metaCache.get(key);
+  let meta = null;
+  try {
+    const api = `https://open.spotify.com/oembed?url=${encodeURIComponent(url)}`;
+    const res = await Promise.race([fetch(api, { cache: 'force-cache' }), _timeout(4500)]);
+    if (res && res.ok) {
+      const data = await res.json();
+      meta = {
+        title: data.title || '',
+        artist: data.author_name || '',
+        cover: data.thumbnail_url || '',
+      };
+    }
+  } catch (_) { /* 降级 */ }
+  _metaCache.set(key, meta);
+  return meta;
+}
+
+/**
+ * 异步补全歌曲信息，拿到后回调 update(meta) 让调用方更新 DOM。
+ * 手填字段优先，抓取只补空缺，不覆盖用户填写的内容。
+ */
+function enrichSongMeta(item, update) {
+  const url = item.url || '';
+  const kind = detectMusicType(url);
+  const hasAll = item.name && item.artist && item.cover;
+  if (!url || hasAll) return;
+  (async () => {
+    let fetched = null;
+    if (kind === 'netease') {
+      const id = parseNeteaseId(url);
+      if (id) fetched = await fetchNeteaseMeta(id);
+    } else if (kind === 'spotify') {
+      fetched = await fetchSpotifyMeta(url);
+    }
+    if (!fetched) return;
+    const merged = {
+      title: item.name || fetched.title || '',
+      artist: item.artist || fetched.artist || '',
+      cover: item.cover || fetched.cover || '',
+    };
+    update(merged);
+  })();
+}
+
 /* ── Spotify 渲染 ─────────────────────────────────────────────────── */
 
 function renderSpotify(container, trackId, meta) {
@@ -328,10 +412,66 @@ function renderAbc(container, notation) {
 /* ── 主入口：渲染一个 item ───────────────────────────────────────── */
 
 /**
+ * 旋转黑胶唱片：中心专辑封面 + 唱片凹槽纹理 + 轴孔，下方歌名/歌手信息条。
+ * 返回一个 update(meta) 用于异步补全抓到的封面/歌名。
+ */
+function renderVinyl(container, item) {
+  const wrap = document.createElement('div');
+  wrap.className = 'adv-vinyl';
+  container.appendChild(wrap);
+
+  const disc = document.createElement('div');
+  disc.className = 'adv-vinyl-disc';
+  // 唱片标签（中心封面）
+  const label = document.createElement('div');
+  label.className = 'adv-vinyl-label';
+  const img = document.createElement('img');
+  img.className = 'adv-vinyl-cover';
+  img.alt = '';
+  const note = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  note.setAttribute('viewBox', '0 0 24 24');
+  note.setAttribute('aria-hidden', 'true');
+  note.innerHTML = '<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>';
+  note.setAttribute('class', 'adv-vinyl-note');
+  label.append(img, note);
+  const hole = document.createElement('div');
+  hole.className = 'adv-vinyl-hole';
+  disc.append(label, hole);
+  wrap.appendChild(disc);
+
+  const info = document.createElement('div');
+  info.className = 'adv-vinyl-info';
+  const title = document.createElement('div');
+  title.className = 'adv-vinyl-title';
+  const sub = document.createElement('div');
+  sub.className = 'adv-vinyl-sub';
+  info.append(title, sub);
+  wrap.appendChild(info);
+
+  const apply = (m) => {
+    const t = m?.title || '一首歌';
+    const a = m?.artist || '';
+    title.textContent = t;
+    sub.textContent = a ? `${a} · 旋转播放` : '旋转播放';
+    const cover = m?.cover || '';
+    if (cover) {
+      img.onload = () => label.classList.add('has-cover');
+      img.onerror = () => label.classList.remove('has-cover');
+      img.src = cover;
+    } else {
+      label.classList.remove('has-cover');
+      img.removeAttribute('src');
+    }
+  };
+  apply({ title: item.name, artist: item.artist, cover: item.cover });
+  return apply;
+}
+
+/**
  * 把一个礼物 item 渲染成 DOM，追加到 container
  *
  * item 结构（和 rules.js 保持一致）：
- *   { type: 'song', url: '...', name?: '...', artist?: '...' }
+ *   { type: 'song', url: '...', name?: '...', artist?: '...', cover?: '...' }
  *   { type: 'abc', abc: '...', name?: '...' }
  */
 function renderMusicItem(container, item) {
@@ -344,7 +484,16 @@ function renderMusicItem(container, item) {
 
   const url = item.url || '';
   const kind = detectMusicType(url);
-  const meta = { title: item.name, artist: item.artist };
+  const meta = { title: item.name, artist: item.artist, cover: item.cover };
+
+  // 旋转黑胶 + 歌曲信息（歌名/歌手/封面），异步补全抓取到的元数据
+  const updateVinyl = renderVinyl(container, item);
+  enrichSongMeta(item, (m) => {
+    meta.title = m.title || meta.title;
+    meta.artist = m.artist || meta.artist;
+    meta.cover = m.cover || meta.cover;
+    updateVinyl(meta);
+  });
 
   const wrap = document.createElement('div');
   wrap.className = 'adv-music';
@@ -409,25 +558,32 @@ function renderLinkFallback(container, url, meta, label) {
  * 把用户粘贴的原始字符串解析成 item
  * 返回 null 表示不认识
  */
-function parseMusicUrl(raw) {
+function parseMusicUrl(raw, providedMeta) {
   const url = (raw || '').trim();
   if (!url) return null;
 
   const kind = detectMusicType(url);
   if (!kind) return null;
 
+  const extra = {};
+  if (providedMeta && typeof providedMeta === 'object') {
+    if (providedMeta.name) extra.name = String(providedMeta.name).slice(0, 200);
+    if (providedMeta.artist) extra.artist = String(providedMeta.artist).slice(0, 200);
+    if (providedMeta.cover) extra.cover = String(providedMeta.cover).slice(0, 500);
+  }
+
   if (kind === 'spotify') {
     const id = parseSpotifyId(url);
-    return id ? { type: 'song', url, platform: 'spotify' } : null;
+    return id ? { type: 'song', url, platform: 'spotify', ...extra } : null;
   }
 
   if (kind === 'netease') {
     const id = parseNeteaseId(url);
     if (!id) {
       // 短链无法解析：存原链接，降级显示跳转
-      return { type: 'song', url, platform: 'netease', note: 'short_link' };
+      return { type: 'song', url, platform: 'netease', note: 'short_link', ...extra };
     }
-    return { type: 'song', url, platform: 'netease' };
+    return { type: 'song', url, platform: 'netease', ...extra };
   }
 
   return null;
@@ -436,9 +592,12 @@ function parseMusicUrl(raw) {
 /* ── 导出 ─────────────────────────────────────────────────────────── */
 window.AdventMusic = {
   renderMusicItem,
+  renderVinyl,
   renderAbc,
   parseMusicUrl,
   detectMusicType,
   parseSpotifyId,
   parseNeteaseId,
+  fetchNeteaseMeta,
+  fetchSpotifyMeta,
 };

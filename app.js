@@ -78,6 +78,8 @@ function refresh() {
   const page = document.getElementById('page');
   page.classList.toggle('dusk', night);
   page.classList.toggle('adv-smooth', !!smooth);
+  // overlay 是 body 的直接子元素，流畅模式也作用于浮层内的礼物卡（黑胶停转等）
+  document.body.classList.toggle('adv-smooth', !!smooth);
   applyDisplayButton(display);
   applySmoothButton(smooth);
   houseCtrl.configure({ night: !!night, smooth: !!smooth });
@@ -173,12 +175,21 @@ async function onWindowTap(day) {
   }
 
   if (!result.open) {
-    // 偷看了
+    // 偷看：记一笔 attempt，同时把内容显示给你看（但不算正式开启，顶部计数不变）
     board = Backend.getBoard();
     refresh();
-    const cell = board?.cells?.find(c => c.day === day);
-    const unlockDate = `12月${day}日零点`;
-    houseCtrl?.rattle?.(day, `${unlockDate}才开 · 泡芙已记下`);
+    houseCtrl?.rattle?.(day, `偷看 · 泡芙已记下`);
+    const rect = { left: innerWidth / 2 - 20, top: innerHeight / 2 - 20, width: 40, height: 40 };
+    showGiftCard(day, result.gifts, result.remote_extras || [], result.sannan_extras || [], rect, null);
+    requestAnimationFrame(() => {
+      const overlay = document.getElementById('overlay');
+      const fd = overlay?.querySelector('.adv-front .fby');
+      if (fd) fd.textContent = 'un regard en cachette · 偷看';
+      const fh = overlay?.querySelector('.adv-front .fhint');
+      if (fh) fh.textContent = '偷看已记下 · 轻触翻开';
+      const hint = overlay?.querySelector('.adv-row .adv-hint');
+      if (hint) hint.textContent = '偷看不算开启，窗仍会在当天亮';
+    });
     return;
   }
 
@@ -194,8 +205,8 @@ async function onWindowTap(day) {
 }
 
 /* ── 礼物卡 ───────────────────────────────────────────────────────── */
-function showGiftCard(day, gifts, remoteExtras, sannanExtras, rect, doneFn) {
-  const overlay = document.getElementById('overlay');
+function showGiftCard(day, gifts, remoteExtras, sannanExtras, rect, doneFn, overlayId) {
+  const overlay = document.getElementById(overlayId || 'overlay');
   overlay.innerHTML = '';
   overlay.style.display = 'flex';
 
@@ -330,6 +341,40 @@ function showGiftCard(day, gifts, remoteExtras, sannanExtras, rect, doneFn) {
     );
     a.onfinish = () => { overlay.style.display = 'none'; overlay.innerHTML = ''; };
   }
+}
+
+/* ── 对方视角预览：把当前编辑器内容当作对方打开礼物时看到的样子展示 ──
+   只读预览，不写入存档、不记录开启/偷看，不改动真实礼物。 */
+function showSelfPreview(day, items) {
+  const existing = document.getElementById('selfPreviewOverlay');
+  if (existing) existing.remove();
+  const host = document.createElement('div');
+  host.className = 'adv-zoom';
+  host.id = 'selfPreviewOverlay';
+  host.style.zIndex = '1280';
+  document.body.appendChild(host);
+
+  const kind = items.some(i => i.type === 'song') ? 'chanson' : 'lettre';
+  const gifts = {
+    ai: {
+      day, kind, items,
+      note: '这是对方打开时会看到的样子（预览）',
+      id: `preview-${day}`,
+      answer: '',
+    },
+  };
+  const rect = { left: innerWidth / 2 - 20, top: innerHeight / 2 - 20, width: 40, height: 40 };
+  showGiftCard(day, gifts, [], [], rect, () => host.remove(), 'selfPreviewOverlay');
+
+  // 在封面上标注「预览」，并区分这不是真正在开启的礼物
+  requestAnimationFrame(() => {
+    const front = host.querySelector('.adv-front .fhint');
+    if (front) front.textContent = '对方视角预览 · 轻触翻开';
+    const fd = host.querySelector('.adv-front .fby');
+    if (fd) fd.textContent = 'aperçu · 仅你可见';
+    const hint = host.querySelector('.adv-row .adv-hint');
+    if (hint) hint.textContent = '仅为预览，未真正封好';
+  });
 }
 
 /* ── 渲染单个 item ────────────────────────────────────────────────── */
@@ -580,7 +625,9 @@ async function openEditor(defaultDay) {
   const urlPreviewBtn = document.createElement('button');
   urlPreviewBtn.textContent = '预览';
   urlPreviewBtn.onclick = () => {
-    const parsed = window.AdventMusic?.parseMusicUrl(urlIn.value);
+    const parsed = window.AdventMusic?.parseMusicUrl(urlIn.value, {
+      name: nameIn.value.trim(), artist: artistIn.value.trim(), cover: coverIn.value.trim(),
+    });
     if (!parsed) { toast('链接格式不认识，支持 Spotify track 和网易云歌曲链接'); return; }
     urlPreview.innerHTML = '';
     urlPreview.style.display = 'block';
@@ -590,6 +637,27 @@ async function openEditor(defaultDay) {
   urlRow.appendChild(urlIn);
   urlRow.appendChild(urlPreviewBtn);
   frame.appendChild(urlRow);
+
+  // 歌曲信息（可选）：手填优先，留空则尝试自动抓取
+  const musicMetaRow = document.createElement('div');
+  musicMetaRow.className = 'adv-url-row';
+  const nameIn = document.createElement('input');
+  nameIn.className = 'adv-in1';
+  nameIn.type = 'text';
+  nameIn.placeholder = '歌名（可选，留空自动抓）';
+  const artistIn = document.createElement('input');
+  artistIn.className = 'adv-in1';
+  artistIn.type = 'text';
+  artistIn.placeholder = '歌手（可选）';
+  musicMetaRow.append(nameIn, artistIn);
+  frame.appendChild(musicMetaRow);
+
+  const coverIn = document.createElement('input');
+  coverIn.className = 'adv-in1';
+  coverIn.type = 'url';
+  coverIn.placeholder = '专辑封面图片链接（可选，留空自动抓）';
+  coverIn.style.marginTop = '6px';
+  frame.appendChild(coverIn);
 
   const urlPreview = document.createElement('div');
   urlPreview.className = 'adv-music-preview';
@@ -727,6 +795,40 @@ async function openEditor(defaultDay) {
   cancelBtn.textContent = '取消';
   cancelBtn.onclick = closeOverlay;
 
+  // 从当前编辑器内容构造 items，供「封好」与「预览对方视角」共用。
+  function collectItems() {
+    const items = [];
+    const bodyText = textArea.value.trim();
+    if (bodyText) items.push({ type: 'text', text: bodyText });
+
+    const musicUrl = urlIn.value.trim();
+    if (musicUrl) {
+      const parsed = window.AdventMusic?.parseMusicUrl(musicUrl, {
+        name: nameIn.value.trim(), artist: artistIn.value.trim(), cover: coverIn.value.trim(),
+      });
+      if (parsed) items.push(parsed);
+      else return { error: '音乐链接格式不认识' };
+    }
+
+    if (uploadedImageUrl) items.push({ type: 'image', url: uploadedImageUrl });
+    if (recUploadUrl) items.push({ type: 'voice', url: recUploadUrl });
+    if (uploadedAttachment) items.push(uploadedAttachment);
+    return { items };
+  }
+
+  // 预览：以对方打开礼物时看到的样子展示当前内容，不写入存档、不记录偷看。
+  const previewBtn = document.createElement('button');
+  previewBtn.className = 'adv-btn';
+  previewBtn.textContent = '👁 预览对方视角';
+  previewBtn.onclick = () => {
+    const day = parseInt(dayIn.value);
+    if (!day || day < 1 || day > 25) { msgSpan.textContent = '日期要在 1—25 之间'; return; }
+    const { items, error } = collectItems();
+    if (error) { msgSpan.textContent = error; return; }
+    if (!items || !items.length) { msgSpan.textContent = '写点什么再预览~'; return; }
+    showSelfPreview(day, items);
+  };
+
   const saveBtn = document.createElement('button');
   saveBtn.className = 'adv-btn solid';
   saveBtn.textContent = '封好礼盒';
@@ -734,22 +836,9 @@ async function openEditor(defaultDay) {
     const day = parseInt(dayIn.value);
     if (!day || day < 1 || day > 25) { msgSpan.textContent = '日期要在 1—25 之间'; return; }
 
-    const items = [];
-    const bodyText = textArea.value.trim();
-    if (bodyText) items.push({ type: 'text', text: bodyText });
-
-    const musicUrl = urlIn.value.trim();
-    if (musicUrl) {
-      const parsed = window.AdventMusic?.parseMusicUrl(musicUrl);
-      if (parsed) items.push(parsed);
-      else { msgSpan.textContent = '音乐链接格式不认识'; return; }
-    }
-
-    if (uploadedImageUrl) items.push({ type: 'image', url: uploadedImageUrl });
-    if (recUploadUrl) items.push({ type: 'voice', url: recUploadUrl });
-    if (uploadedAttachment) items.push(uploadedAttachment);
-
-    if (!items.length) { msgSpan.textContent = '写点什么再封好~'; return; }
+    const { items, error } = collectItems();
+    if (error) { msgSpan.textContent = error; return; }
+    if (!items || !items.length) { msgSpan.textContent = '写点什么再封好~'; return; }
 
     saveBtn.disabled = true;
     try {
@@ -768,6 +857,7 @@ async function openEditor(defaultDay) {
   row.className = 'adv-row';
   row.appendChild(msgSpan);
   row.appendChild(cancelBtn);
+  row.appendChild(previewBtn);
   row.appendChild(saveBtn);
   frame.appendChild(row);
 

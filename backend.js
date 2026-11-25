@@ -723,14 +723,8 @@ function getBoard() {
 
 /* ── 写操作（touch / seen / answer / hide）────────────────────────── */
 
-function touch(day) {
-  if (!Number.isInteger(day) || day < 1 || day > 25) throw new Error('invalid day');
-  if (!isUnlocked(day)) {
-    recordPeek(day, save.settings.who === 'yan' ? 'yan' : 'san', 'attempt');
-    return { open: false, peek: true, outcome: 'attempt' };
-  }
-  markOpened(day);
-
+/** 取出某天的礼物内容（不产生任何开启记录），供正常开启与「偷看」共用 */
+function giftsForDay(day) {
   const gifts = {};
   if (hasBuiltin(day)) {
     const yan = builtinGift(day);
@@ -758,7 +752,20 @@ function touch(day) {
     .filter(e => !localIds.has(e.id)).map(withAnswer);
   const displayedIds = [...remoteExtras, ...sannanExtras].map(e => e.id).filter(Boolean);
 
-  return { open: true, gifts, remote_extras: remoteExtras, sannan_extras: sannanExtras, displayed_remote_ids: displayedIds };
+  return { gifts, remote_extras: remoteExtras, sannan_extras: sannanExtras, displayed_remote_ids: displayedIds };
+}
+
+function touch(day) {
+  if (!Number.isInteger(day) || day < 1 || day > 25) throw new Error('invalid day');
+  const content = giftsForDay(day);
+  if (!isUnlocked(day)) {
+    // 偷看：按协议记录为 attempt（未解锁不能伪造成 read，保证双方对账可信），
+    // 但按用户约定同时给出礼物内容供查看——不 markOpened，顶部开启数不变。
+    recordPeek(day, save.settings.who === 'yan' ? 'yan' : 'san', 'attempt');
+    return { open: false, peek: true, outcome: 'attempt', ...content };
+  }
+  markOpened(day);
+  return { open: true, ...content };
 }
 
 function markOpened(day) {
