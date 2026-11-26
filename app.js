@@ -576,7 +576,44 @@ function renderRemoteEntry(container, entry, label, day) {
   for (const item of items) {
     renderItem(half, item, day, entry.from || 'remote', entry.answer || '', entry.id || '');
   }
+  appendMemoryActions(half, entry.id || `${day}-${label}`);
   container.appendChild(half);
+}
+
+function appendMemoryActions(container, id) {
+  const key = `advent-v4-favorite:${id}`;
+  const row = document.createElement('div'); row.className = 'adv-memory-actions';
+  const fav = document.createElement('button'); fav.className = 'adv-btn';
+  const sync = () => { fav.textContent = localStorage.getItem(key) === '1' ? '★ 已收藏' : '☆ 收藏'; };
+  fav.onclick = () => { localStorage.getItem(key) === '1' ? localStorage.removeItem(key) : localStorage.setItem(key, '1'); sync(); };
+  const reply = document.createElement('button'); reply.className = 'adv-btn'; reply.textContent = '↩ 写回信';
+  reply.onclick = () => openReplyComposer(id);
+  row.append(fav, reply); sync(); container.appendChild(row);
+}
+
+function openReplyComposer(id) {
+  const overlay = document.getElementById('overlay'); overlay.innerHTML = ''; overlay.style.display = 'flex'; overlay.classList.add('on');
+  const sheet = document.createElement('div'); sheet.className = 'adv-sheet adv-paper';
+  sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">写一封回信</span><span class="by">reply</span></div><p class="adv-editor-intro">这封回信只关联原礼物，不会改写对方的内容。</p></div>';
+  const frame = sheet.querySelector('.adv-frame'); const ta = document.createElement('textarea'); ta.className = 'adv-ta'; ta.placeholder = '想对这份礼物说什么？';
+  const saved = localStorage.getItem(`advent-v4-reply:${id}`); if (saved) ta.value = saved;
+  const row = document.createElement('div'); row.className = 'adv-row'; const close = document.createElement('button'); close.className = 'adv-btn'; close.textContent = '关上';
+  const save = document.createElement('button'); save.className = 'adv-btn solid'; save.textContent = '保存回信';
+  close.onclick = closeOverlay; save.onclick = () => { localStorage.setItem(`advent-v4-reply:${id}`, ta.value.slice(0,4000)); toast('回信已保存在这封礼物旁'); closeOverlay(); };
+  frame.append(ta, row); row.append(close, save); overlay.appendChild(sheet); overlay.onclick = e => { if (e.target === overlay) closeOverlay(); };
+}
+
+function openScrapbook() {
+  const overlay = document.getElementById('overlay'); overlay.innerHTML = ''; overlay.style.display = 'flex'; overlay.classList.add('on');
+  const sheet = document.createElement('div'); sheet.className = 'adv-sheet adv-paper';
+  sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">手账抽屉</span><span class="by">scrapbook</span></div><p class="adv-editor-intro">拖动贴纸，留下今天的页面。草稿只保存在当前浏览器。</p><label class="adv-lab">信纸标题</label><input class="adv-in1" id="scrapTitle" placeholder="十二月的某一天"><label class="adv-lab">正文</label><textarea class="adv-ta" id="scrapText" placeholder="写一点冬天的事…"></textarea><div class="adv-sticker-tray"><button type="button" data-sticker="★">★</button><button type="button" data-sticker="❄">❄</button><button type="button" data-sticker="♡">♡</button><button type="button" data-sticker="🍪">🍪</button></div><div class="adv-scrap-canvas" id="scrapCanvas"></div><div class="adv-row"><button class="adv-btn" id="scrapClose">关上</button><button class="adv-btn solid" id="scrapSave">保存手账</button></div></div>';
+  overlay.appendChild(sheet);
+  const title = sheet.querySelector('#scrapTitle'), text = sheet.querySelector('#scrapText'), canvas = sheet.querySelector('#scrapCanvas');
+  try { const d = JSON.parse(localStorage.getItem('advent-v4-scrapbook') || 'null'); if (d) { title.value = d.title || ''; text.value = d.text || ''; (d.stickers || []).forEach(s => addSticker(s.char, s.x, s.y)); } } catch {}
+  function addSticker(char, x = 50, y = 50) { const b = document.createElement('button'); b.type = 'button'; b.className = 'adv-sticker'; b.textContent = char; b.style.left = x + '%'; b.style.top = y + '%'; b.onpointerdown = e => { b.setPointerCapture(e.pointerId); const move = ev => { const r = canvas.getBoundingClientRect(); b.style.left = Math.max(0, Math.min(100, (ev.clientX-r.left)/r.width*100))+'%'; b.style.top = Math.max(0, Math.min(100, (ev.clientY-r.top)/r.height*100))+'%'; }; b.onpointermove = move; b.onpointerup = () => b.onpointermove = null; }; canvas.appendChild(b); }
+  sheet.querySelectorAll('[data-sticker]').forEach(b => b.onclick = () => addSticker(b.dataset.sticker));
+  sheet.querySelector('#scrapClose').onclick = closeOverlay; sheet.querySelector('#scrapSave').onclick = () => { localStorage.setItem('advent-v4-scrapbook', JSON.stringify({title:title.value.slice(0,200), text:text.value.slice(0,6000), stickers:[...canvas.children].map(b=>({char:b.textContent,x:parseFloat(b.style.left),y:parseFloat(b.style.top)}))})); toast('手账草稿已保存'); closeOverlay(); };
+  overlay.onclick = e => { if (e.target === overlay) closeOverlay(); };
 }
 
 function legacyEntryItems(entry) {
@@ -1136,7 +1173,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const deskMail = document.getElementById('deskMail');
   const deskRecord = document.getElementById('deskRecord');
   if (deskWrite) deskWrite.onclick = () => UI.openEditor();
-  if (deskDiary) deskDiary.onclick = () => UI.openEditor();
+  if (deskDiary) deskDiary.onclick = () => openScrapbook();
   if (deskMail) deskMail.onclick = () => UI.showArchive();
   if (deskRecord) deskRecord.onclick = () => {
     const audio = document.querySelector('audio');

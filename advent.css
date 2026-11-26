@@ -787,3 +787,10 @@
 .adv-comic-reader img { grid-column:1 / -1; width:100%; max-height:420px; object-fit:contain; background:#fffaf0; }
 .adv-comic-reader .adv-hint { text-align:center; }
 .adv-comic-reader .adv-btn { min-width:32px; padding:2px 8px; }
+.adv-memory-actions { display:flex; justify-content:flex-end; gap:6px; margin-top:10px; }
+.adv-memory-actions .adv-btn { font-size:12px; padding:3px 10px; }
+.adv-sticker-tray { display:flex; gap:6px; margin:12px 0; }
+.adv-sticker-tray button { width:36px; height:32px; border:1px solid rgba(107,68,35,.3); background:#fffaf0; cursor:pointer; font-size:18px; }
+.adv-scrap-canvas { position:relative; min-height:190px; margin-top:8px; overflow:hidden; border:1px solid rgba(107,68,35,.3); background:repeating-linear-gradient(0deg,transparent 0 27px,rgba(107,68,35,.12) 28px),#fffaf0; }
+.adv-sticker { position:absolute; transform:translate(-50%,-50%); border:0; background:none; cursor:grab; font-size:30px; touch-action:none; }
+.adv-sticker:active { cursor:grabbing; }
