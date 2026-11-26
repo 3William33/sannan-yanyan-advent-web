@@ -20,8 +20,8 @@
  *   - 解锁规则是客户端交互层限制（与原版本机运行一致），并非服务器端安全边界
  */
 
-import { CONFIG, UPLOAD_MIME_EXT, REMOTE_MEDIA_EXTENSIONS, MAX_UPLOAD_BYTES } from './config.js?v=705ecd1';
-import { BUILTIN_DAYS } from './builtin-gifts.js?v=705ecd1';
+import { CONFIG, UPLOAD_MIME_EXT, REMOTE_MEDIA_EXTENSIONS, MAX_UPLOAD_BYTES } from './config.js?v=8a1c3e';
+import { BUILTIN_DAYS } from './builtin-gifts.js?v=8a1c3e';
 
 /* ── 编解码工具（与 advent-gifts-v3.2 协议一致）────────────────────── */
 
@@ -272,7 +272,7 @@ function cleanComicData(value, { allowLocal = true } = {}) {
 }
 function cleanScrapbookLayout(value, { allowLocal = true } = {}) {
   if(!value||typeof value!=='object')return null;const stickers=[];
-  for(const s of (Array.isArray(value.stickers)?value.stickers:[]).slice(0,100)){const out={char:String(s.char||'').slice(0,8),x:clamp(s.x,0,100,50),y:clamp(s.y,0,100,50),scale:clamp(s.scale,.2,4,1),rotate:clamp(s.rotate,-360,360,0),opacity:clamp(s.opacity,.1,1,1),z:Math.round(clamp(s.z,0,100,1))};const src=String(s.src||'').slice(0,1000);if(src&&(isAllowedRemoteAsset(src)||(allowLocal&&isSafeLocalUploadUrl(src))))out.src=src;if(out.char||out.src)stickers.push(out);}
+  for(const s of (Array.isArray(value.stickers)?value.stickers:[]).slice(0,100)){const out={char:String(s.char||'').slice(0,8),x:clamp(s.x,0,100,50),y:clamp(s.y,0,100,50),scale:clamp(s.scale,.2,4,1),rotate:clamp(s.rotate,-360,360,0),opacity:clamp(s.opacity,.1,1,1),z:Math.round(clamp(s.z,0,100,1))};const src=String(s.src||'').slice(0,1000);if(src&&(isAllowedRemoteAsset(src)||(allowLocal&&isSafeLocalUploadUrl(src))))out.src=src;/* 贴纸库元数据：仅元数据，用于重开后识别/替换，不影响解锁与归属 */if(s.name)out.name=String(s.name).slice(0,80);if(s.stickerId)out.stickerId=String(s.stickerId).slice(0,120);if(s.patternId)out.patternId=String(s.patternId).slice(0,120);if(out.char||out.src)stickers.push(out);}
   return {title:String(value.title||'').slice(0,200),text:String(value.text||'').slice(0,6000),paper:['cream','kraft','grid','snow','botanical','blank'].includes(value.paper)?value.paper:'cream',wax:String(value.wax||'wine').slice(0,30),tape:String(value.tape||'paper').slice(0,30),stickers};
 }
 
@@ -479,7 +479,8 @@ function classifyError(e) {
   const msg = String((e && e.message) || e || '');
   if (/abort/i.test(msg)) return { reason: 'timeout', label: '网络超时' };
   if (/failed to fetch|networkerror|load failed|connection/i.test(msg)) return { reason: 'network', label: '网络不可达' };
-  if (/http 403|http 429|rate limit|abuse/i.test(msg)) return { reason: 'api_limit', label: 'GitHub 接口限流' };
+  if (/http 403|forbidden|permission|write permission/i.test(msg)) return { reason: 'permission', label: '权限不足（无写入/读取授权）' };
+  if (/http 429|rate limit|abuse/i.test(msg)) return { reason: 'api_limit', label: 'GitHub 接口限流' };
   if (/http 404/i.test(msg)) return { reason: 'missing', label: '数据文件尚未创建（正常）' };
   if (/http 5\d\d/i.test(msg)) return { reason: 'server', label: 'GitHub 服务暂时不可用' };
   if (/json|decode|invalid|payload|shape|unexpected|too large/i.test(msg)) return { reason: 'parse', label: '数据解析失败' };
@@ -619,6 +620,10 @@ function syncAll() {
       const labels = [...new Set(failed.map(s => s.label))].join('、');
       message = fromCache.length ? `部分来源离线（${labels}）· 已用缓存` : `部分来源失败（${labels}）`;
     }
+    /* 偷看记录是否成功读取：只有真正读到文件（succeeded）才算「已知次数」。
+       404（missing）、权限不足、网络失败、离线缓存都表示「无法确认」，UI 不得显示成已确认的 0 次。 */
+    const peekSrc = sources.peek_log;
+    const peekAvailable = !!peekSrc && peekSrc.state === 'succeeded';
     syncState = {
       state,
       message,
@@ -626,6 +631,7 @@ function syncAll() {
       failedCount: failed.length,
       fromCacheCount: fromCache.length,
       sources,
+      peekAvailable,
       finished_at: shanghaiNowIso(),
     };
     if (ok > 0) writeRemoteCache();
@@ -746,6 +752,7 @@ function getBoard() {
     peeks: counts.san + counts.yan,
     peek_counts: counts,
     peek_events: events,
+    peek_available: syncState.peekAvailable !== false,
     sync: { ...syncState },
     freeze: save.yanyan_freeze,
     cells,
@@ -1110,58 +1117,68 @@ async function publishAll(onProgress) {
       }
     }
 
-    /* 3. 更新无内容索引 */
-    progress('正在更新礼物索引…');
+    /* 非必要步骤：失败只记录告警，不阻断礼物本体与后续步骤（可独立修复重试） */
+    const warnings = [];
+    const softStep = async (label, fn) => { try { await fn(); } catch (e) { warnings.push(`${label}：${e.message || e}`); } };
+
+    /* 3. 更新无内容索引（独立于礼物本体；失败不影响已写入的礼物） */
     const index = indexFromDays(merged, 'san');
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const { sha } = await ghGetFile(token, 'gift_index_sannan.json');
-      try {
-        await ghPutFile(token, 'gift_index_sannan.json',
-          new TextEncoder().encode(JSON.stringify(index, null, 2)),
-          `Update sannan gift index (${commitStamp()})`, sha);
-        break;
-      } catch (e) {
-        if ((e.status !== 409 && e.status !== 422) || attempt === 3) throw e;
-        await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+    await softStep('礼物索引', async () => {
+      progress('正在更新礼物索引…');
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const { sha } = await ghGetFile(token, 'gift_index_sannan.json');
+        try {
+          await ghPutFile(token, 'gift_index_sannan.json',
+            new TextEncoder().encode(JSON.stringify(index, null, 2)),
+            `Update sannan gift index (${commitStamp()})`, sha);
+          break;
+        } catch (e) {
+          if ((e.status !== 409 && e.status !== 422) || attempt === 3) throw e;
+          await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+        }
       }
-    }
+    });
 
     /* 4. 同步书桌状态（便签/相框/收藏），独立于正式礼物与解锁规则 */
-    progress('正在同步圣诞书桌…');
-    for(const frame of Object.values(save.companion.frames||{}))if(frame?.src)frame.src=await publishLocalAsset(token,frame.src);
-    for(let attempt=0;attempt<4;attempt++){
-      const {content,sha}=await ghGetFile(token,'companion_state.json');let remote={notes:{},frames:{},favorites:{}};
-      if(content){try{const wrapper=JSON.parse(new TextDecoder().decode(content));remote=decodeRaw(wrapper.payload,SAN_DIGEST);}catch{/* 首次或损坏时以本地安全结构重建 */}}
-      mergeCompanionState(remote);const wrapper={version:1,updated_at:shanghaiNowIso(),protocol:'advent-companion-v1',payload:encodePayload(save.companion,SAN_DIGEST)};
-      try{await ghPutFile(token,'companion_state.json',new TextEncoder().encode(JSON.stringify(wrapper,null,2)),`Update companion state (${commitStamp()})`,sha);break;}catch(e){if((e.status!==409&&e.status!==422)||attempt===3)throw e;await new Promise(r=>setTimeout(r,300*(attempt+1)));}
-    }
+    await softStep('书桌状态', async () => {
+      progress('正在同步圣诞书桌…');
+      for(const frame of Object.values(save.companion.frames||{}))if(frame?.src)frame.src=await publishLocalAsset(token,frame.src);
+      for(let attempt=0;attempt<4;attempt++){
+        const {content,sha}=await ghGetFile(token,'companion_state.json');let remote={notes:{},frames:{},favorites:{}};
+        if(content){try{const wrapper=JSON.parse(new TextDecoder().decode(content));remote=decodeRaw(wrapper.payload,SAN_DIGEST);}catch{/* 首次或损坏时以本地安全结构重建 */}}
+        mergeCompanionState(remote);const wrapper={version:1,updated_at:shanghaiNowIso(),protocol:'advent-companion-v1',payload:encodePayload(save.companion,SAN_DIGEST)};
+        try{await ghPutFile(token,'companion_state.json',new TextEncoder().encode(JSON.stringify(wrapper,null,2)),`Update companion state (${commitStamp()})`,sha);break;}catch(e){if((e.status!==409&&e.status!==422)||attempt===3)throw e;await new Promise(r=>setTimeout(r,300*(attempt+1)));}
+      }
+    });
 
-    /* 4. 合并偷看记录（读取远端 → 合并双方历史 → 写回） */
-    progress('正在合并偷看记录…');
-    const localPeeks = mergePeekEvents(save.peek_log);
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const { content, sha } = await ghGetFile(token, 'peek_log.json');
-      let current = {};
-      if (content) {
-        try { current = JSON.parse(new TextDecoder().decode(content)); } catch { current = {}; }
+    /* 4. 合并偷看记录（读取远端 → 合并双方历史 → 写回），独立于礼物本体 */
+    await softStep('偷看记录', async () => {
+      progress('正在合并偷看记录…');
+      const localPeeks = mergePeekEvents(save.peek_log);
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const { content, sha } = await ghGetFile(token, 'peek_log.json');
+        let current = {};
+        if (content) {
+          try { current = JSON.parse(new TextDecoder().decode(content)); } catch { current = {}; }
+        }
+        const mergedPeeks = {
+          version: 2,
+          updated_at: shanghaiNowIso(),
+          events: mergePeekEvents(current, localPeeks),
+        };
+        try {
+          await ghPutFile(token, 'peek_log.json',
+            new TextEncoder().encode(JSON.stringify(mergedPeeks, null, 2)),
+            `Merge peek log (${commitStamp()})`, sha);
+          save.peek_log = mergePeekEvents(save.peek_log, mergedPeeks.events);
+          save.peek_counts = peekCounts(save.peek_log);
+          break;
+        } catch (e) {
+          if ((e.status !== 409 && e.status !== 422) || attempt === 3) throw e;
+          await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+        }
       }
-      const mergedPeeks = {
-        version: 2,
-        updated_at: shanghaiNowIso(),
-        events: mergePeekEvents(current, localPeeks),
-      };
-      try {
-        await ghPutFile(token, 'peek_log.json',
-          new TextEncoder().encode(JSON.stringify(mergedPeeks, null, 2)),
-          `Merge peek log (${commitStamp()})`, sha);
-        save.peek_log = mergePeekEvents(save.peek_log, mergedPeeks.events);
-        save.peek_counts = peekCounts(save.peek_log);
-        break;
-      } catch (e) {
-        if ((e.status !== 409 && e.status !== 422) || attempt === 3) throw e;
-        await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
-      }
-    }
+    });
 
     /* 5. 标记本地条目已发布并持久化 */
     for (const entries of Object.values(save.human_gifts)) {
@@ -1172,7 +1189,9 @@ async function publishAll(onProgress) {
     persist();
     writeRemoteCache();
 
-    return { message: '礼物、资源、索引与偷看记录均已发布' };
+    return { message: warnings.length
+      ? `礼物已发布；部分附带数据未同步（${warnings.join('；')}），可稍后重试，礼物不会重复追加`
+      : '礼物、资源、索引与偷看记录均已发布', warnings };
   } catch (e) {
     if (e.status === 401 || e.status === 403) {
       sessionStorage.removeItem(PAT_KEY); // Token 无效：清除本次会话凭据

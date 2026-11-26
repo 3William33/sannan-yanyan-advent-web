@@ -9,8 +9,9 @@
  */
 
 /* 版本号与 index.html 保持一致：每次发布同步更新，强制移动 Safari 重新拉取（它缓存较强） */
-import { mountHouse, iconSvg } from './house.js?v=705ecd1';
-import { Backend } from './backend.js?v=705ecd1';
+import { mountHouse, iconSvg } from './house.js?v=8a1c3e';
+import { Backend } from './backend.js?v=8a1c3e';
+import { mountStickerLibrary } from './stickers.js?v=8a1c3e';
 
 /* ── 常量 ─────────────────────────────────────────────────────────── */
 const TZ = 'Asia/Shanghai';
@@ -53,6 +54,8 @@ let houseCtrl = null;
 function closeMainOverlay() {
   const overlay = document.getElementById('overlay');
   if (!overlay) return;
+  /* 清理手账素材库定时器，避免浮层关闭后仍在后台刷新（iPad Safari 性能） */
+  try { window.__advStklibDispose?.(); window.__advStklibDispose = null; } catch {}
   overlay.classList.remove('on');
   overlay.style.display = 'none';
   overlay.innerHTML = '';
@@ -86,12 +89,14 @@ function mountStage() {
 function refresh() {
   if (!board || !houseCtrl) return;
 
-  const { today, night, display, smooth, peeks, peek_counts: peekCounts = {}, cells, sync } = board;
+  const { today, night, display, smooth, peeks, peek_counts: peekCounts = {}, cells, sync, peek_available: peekAvailable = true } = board;
 
   // 顶栏：已开启数量严格以 opened_by 为准（与格子亮灯同源，杜绝「亮灯但计数0」）
   document.getElementById('topDay').textContent = today || '—';
   const opened = cells.filter(c => Object.values(c.opened_by || {}).length > 0).length;
-  document.getElementById('topStars').textContent = `★ ${opened} · 三三 ${peekCounts.san || 0} / 砚砚 ${peekCounts.yan || 0}`;
+  // 偷看记录读取失败时显示「?」，不得把未知伪装成已确认的 0 次
+  const peekLabel = peekAvailable ? `三三 ${peekCounts.san || 0} / 砚砚 ${peekCounts.yan || 0}` : '偷看记录待同步';
+  document.getElementById('topStars').textContent = `★ ${opened} · ${peekLabel}`;
 
   // 书桌默认态：不改变旧协议，只把已有看板信息投影成实体物件
   const deskDay = document.getElementById('deskDay');
@@ -109,9 +114,10 @@ function refresh() {
     deskMailStatus.textContent = incoming ? `${incoming} 件新礼物 / 追加礼物` : `${opened} 扇窗已点亮`;
   }
 
-  // 偷看提示
+  // 偷看提示：读取失败时不宣称 0 次，避免出现「已确认无人偷看」的误导
   const peekEl = document.getElementById('peekLine');
-  peekEl.textContent = peeks > 0 ? `泡芙记下了 ${peeks} 次偷看：三三 ${peekCounts.san || 0}，砚砚 ${peekCounts.yan || 0}。` : '';
+  if (!peekAvailable) peekEl.textContent = '偷看记录暂时无法读取，显示的次数仅供参考。';
+  else peekEl.textContent = peeks > 0 ? `泡芙记下了 ${peeks} 次偷看：三三 ${peekCounts.san || 0}，砚砚 ${peekCounts.yan || 0}。` : '';
 
   // 显示模式（自动 / 白昼 / 夜间）与流畅模式：统一作用于页面与房子
   const page = document.getElementById('page');
@@ -841,30 +847,39 @@ function openReplyComposer(id, day) {
 function openScrapbook() {
   const overlay = document.getElementById('overlay'); overlay.innerHTML = ''; overlay.style.display = 'flex'; overlay.classList.add('on');
   const sheet = document.createElement('div'); sheet.className = 'adv-sheet adv-paper';
-  sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">手账抽屉</span><span class="by">scrapbook</span></div><p class="adv-editor-intro">拖动贴纸，留下今天的页面。草稿只保存在当前浏览器。</p><label class="adv-lab">礼物日期</label><input class="adv-in1" id="scrapDay" type="number" min="1" max="25" value="1"><label class="adv-lab">信纸标题</label><input class="adv-in1" id="scrapTitle" placeholder="十二月的某一天"><label class="adv-lab">正文</label><textarea class="adv-ta" id="scrapText" placeholder="写一点冬天的事…"></textarea><div class="adv-sticker-tray"><button type="button" data-sticker="★">★</button><button type="button" data-sticker="❄">❄</button><button type="button" data-sticker="♡">♡</button><button type="button" data-sticker="🍪">🍪</button><label class="adv-sticker-upload">＋ PNG<input id="stickerUpload" type="file" accept="image/png,image/webp" hidden></label></div><div class="adv-sticker-tools"><button type="button" data-action="smaller">−</button><button type="button" data-action="larger">＋</button><button type="button" data-action="rotate">↻</button><button type="button" data-action="fade">◐</button><button type="button" data-action="back">↓</button><button type="button" data-action="front">↑</button><button type="button" data-action="copy">复制</button><button type="button" data-action="delete">删除</button><button type="button" data-action="undo">撤销</button><button type="button" data-action="redo">重做</button></div><div class="adv-scrap-canvas" id="scrapCanvas"></div><div class="adv-row"><button class="adv-btn" id="scrapExport">导出图片</button><button class="adv-btn" id="scrapClose">关上</button><button class="adv-btn" id="scrapSave">保存草稿</button><button class="adv-btn solid" id="scrapPublish">封成礼物</button></div></div>';
+  sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">手账抽屉</span><span class="by">scrapbook</span></div><div class="adv-scrap-body"><div class="adv-scrap-main"><p class="adv-editor-intro">拖动贴纸，留下今天的页面。草稿只保存在当前浏览器。</p><label class="adv-lab">礼物日期</label><input class="adv-in1" id="scrapDay" type="number" min="1" max="25" value="1"><label class="adv-lab">信纸标题</label><input class="adv-in1" id="scrapTitle" placeholder="十二月的某一天"><label class="adv-lab">正文</label><textarea class="adv-ta" id="scrapText" placeholder="写一点冬天的事…"></textarea><div class="adv-sticker-tray"><button type="button" data-sticker="★">★</button><button type="button" data-sticker="❄">❄</button><button type="button" data-sticker="♡">♡</button><button type="button" data-sticker="🍪">🍪</button><label class="adv-sticker-upload">＋ PNG<input id="stickerUpload" type="file" accept="image/png,image/webp" hidden></label></div></div><div class="adv-scrap-side"><button type="button" class="adv-stklib-toggle" id="stklibToggle" aria-expanded="true">🎀 贴纸收纳册 <small>分类 · 搜索 · 配色 · 收藏</small></button><div class="adv-stklib-host" id="stklibHost"></div></div><div class="adv-scrap-stage"><div class="adv-sticker-tools"><button type="button" data-action="smaller">−</button><button type="button" data-action="larger">＋</button><button type="button" data-action="rotate">↻</button><button type="button" data-action="fade">◐</button><button type="button" data-action="back">↓</button><button type="button" data-action="front">↑</button><button type="button" data-action="copy">复制</button><button type="button" data-action="delete">删除</button><button type="button" data-action="undo">撤销</button><button type="button" data-action="redo">重做</button></div><div class="adv-scrap-canvas" id="scrapCanvas"></div><div class="adv-row"><button class="adv-btn" id="scrapExport">导出图片</button><button class="adv-btn" id="scrapClose">关上</button><button class="adv-btn" id="scrapSave">保存草稿</button><button class="adv-btn solid" id="scrapPublish">封成礼物</button></div></div></div></div>';
   overlay.appendChild(sheet);
   const title = sheet.querySelector('#scrapTitle'), text = sheet.querySelector('#scrapText'), canvas = sheet.querySelector('#scrapCanvas');
   const tray=sheet.querySelector('.adv-sticker-tray');tray.insertAdjacentHTML('beforebegin','<div class="adv-scrap-materials"><label>信纸<select id="scrapPaper"><option value="cream">奶油复古</option><option value="kraft">牛皮纸</option><option value="grid">格纹纸</option><option value="snow">雪花信纸</option><option value="botanical">圣诞植物边框</option><option value="blank">简洁空白</option></select></label><label>火漆<select id="scrapWax"><option value="wine">酒红</option><option value="gold">柔金</option><option value="green">松绿</option></select></label><label>胶带<select id="scrapTape"><option value="paper">牛皮纸胶带</option><option value="transparent">半透明胶带</option><option value="holly">冬青胶带</option></select></label></div>');
   const paper=sheet.querySelector('#scrapPaper'),wax=sheet.querySelector('#scrapWax'),tape=sheet.querySelector('#scrapTape');paper.onchange=()=>{canvas.dataset.paper=paper.value;};
-  let selected = null, history = [], future = [];
-  const snapshot = () => [...canvas.children].map(b=>({char:b.dataset.char||'',src:b.dataset.src||'',x:parseFloat(b.style.left),y:parseFloat(b.style.top),scale:+(b.dataset.scale||1),rotate:+(b.dataset.rotate||0),opacity:+(b.dataset.opacity||1),z:+(b.style.zIndex||1)}));
+  let selected = null, history = [], future = [], stklib = null;
+  /* 贴纸快照保留图案元数据，便于重新打开后替换/识别；src 始终是渲染用的 raw URL */
+  const snapshot = () => [...canvas.children].map(b=>({char:b.dataset.char||'',src:b.dataset.src||'',x:parseFloat(b.style.left),y:parseFloat(b.style.top),scale:+(b.dataset.scale||1),rotate:+(b.dataset.rotate||0),opacity:+(b.dataset.opacity||1),z:+(b.style.zIndex||1),name:b.dataset.name||'',stickerId:b.dataset.stickerId||'',patternId:b.dataset.patternId||''}));
   const remember = () => { history.push(snapshot()); if (history.length > 40) history.shift(); future = []; };
   const restore = list => { canvas.innerHTML=''; selected=null; (list||[]).forEach(addStickerFromData); };
   try { const d = JSON.parse(localStorage.getItem('advent-v4-scrapbook') || 'null'); if (d) { title.value = d.title || ''; text.value = d.text || '';paper.value=d.paper||'cream';wax.value=d.wax||'wine';tape.value=d.tape||'paper';canvas.dataset.paper=paper.value;restore(d.stickers || []); } } catch {}
   function applySticker(b) { b.style.transform=`translate(-50%,-50%) scale(${b.dataset.scale||1}) rotate(${b.dataset.rotate||0}deg)`; b.style.opacity=b.dataset.opacity||1; }
   function addStickerFromData(s) { addSticker(s.char||'',s.x??50,s.y??50,s); }
   function addSticker(char,x=50,y=50,data={}) {
-    const b=document.createElement('button');b.type='button';b.className='adv-sticker';b.dataset.char=char;b.dataset.src=data.src||'';b.dataset.scale=data.scale||1;b.dataset.rotate=data.rotate||0;b.dataset.opacity=data.opacity??1;b.style.left=x+'%';b.style.top=y+'%';b.style.zIndex=data.z||1;
-    if(data.src){const img=document.createElement('img');img.alt='自定义贴纸';if(data.preview)img.src=data.preview;else Backend.resolveMediaUrl(data.src).then(src=>{if(src)img.src=src;});b.appendChild(img);}else b.textContent=char;applySticker(b);
+    const b=document.createElement('button');b.type='button';b.className='adv-sticker';b.dataset.char=char;b.dataset.src=data.src||'';b.dataset.scale=data.scale||1;b.dataset.rotate=data.rotate||0;b.dataset.opacity=data.opacity??1;b.dataset.name=data.name||'';b.dataset.stickerId=data.stickerId||'';b.dataset.patternId=data.patternId||'';b.style.left=x+'%';b.style.top=y+'%';b.style.zIndex=data.z||1;
+    if(data.src){const img=document.createElement('img');img.alt=data.name||'贴纸';if(data.preview)img.src=data.preview;else Backend.resolveMediaUrl(data.src).then(src=>{if(src)img.src=src;});b.appendChild(img);}else b.textContent=char;applySticker(b);
     b.onclick=()=>{selected?.classList.remove('selected');selected=b;b.classList.add('selected');};
     const points=new Map();let gesture=null;
     b.onpointerdown=e=>{if(!points.size)remember();b.onclick();points.set(e.pointerId,{x:e.clientX,y:e.clientY});b.setPointerCapture(e.pointerId);if(points.size===2){const [a,c]=[...points.values()];gesture={distance:Math.hypot(c.x-a.x,c.y-a.y),angle:Math.atan2(c.y-a.y,c.x-a.x),scale:+b.dataset.scale,rotate:+b.dataset.rotate};}};
     b.onpointermove=e=>{if(!points.has(e.pointerId))return;points.set(e.pointerId,{x:e.clientX,y:e.clientY});if(points.size===1){const r=canvas.getBoundingClientRect();b.style.left=Math.max(0,Math.min(100,(e.clientX-r.left)/r.width*100))+'%';b.style.top=Math.max(0,Math.min(100,(e.clientY-r.top)/r.height*100))+'%';}else if(points.size===2&&gesture){const [a,c]=[...points.values()];const distance=Math.hypot(c.x-a.x,c.y-a.y),angle=Math.atan2(c.y-a.y,c.x-a.x);b.dataset.scale=clampNumber(gesture.scale*distance/Math.max(1,gesture.distance),.2,4);b.dataset.rotate=gesture.rotate+(angle-gesture.angle)*180/Math.PI;applySticker(b);}};
-    const end=e=>{points.delete(e.pointerId);if(points.size<2)gesture=null;};b.onpointerup=end;b.onpointercancel=end;canvas.appendChild(b);
+    const end=e=>{points.delete(e.pointerId);if(points.size<2)gesture=null;};b.onpointerup=end;b.onpointercancel=end;canvas.appendChild(b);return b;
   }
   function clampNumber(n,min,max){return Math.max(min,Math.min(max,Number(n)||min));}
   sheet.querySelectorAll('[data-sticker]').forEach(b => b.onclick = () => addSticker(b.dataset.sticker));
   sheet.querySelector('#stickerUpload').onchange=async e=>{const f=e.target.files?.[0];if(!f||f.size>2*1024*1024)return toast('贴纸需为 2MB 以内的 PNG/WebP');try{const uploaded=await Backend.uploadFile(f);const preview=await Backend.resolveMediaUrl(uploaded.url);remember();addSticker('',50,50,{src:uploaded.url,preview});}catch(err){toast(err.message);}};
+  /* 集成素材库：点击添加、替换选中，草稿/发布都会带上 raw URL */
+  stklib = mountStickerLibrary(sheet.querySelector('#stklibHost'), {
+    onPick(s){ remember(); if(selected)selected.classList.remove('selected'); const b=addSticker('',50,50,{src:s.raw_url,preview:s.raw_url,name:s.name_zh,stickerId:s.id,patternId:s.pattern_id}); selected=b; b.classList.add('selected'); stklib?.refresh?.(); },
+    onReplace(s){ if(!selected)return toast('先点选一枚贴纸再替换'); remember(); const img=selected.querySelector('img'); selected.dataset.src=s.raw_url; selected.dataset.name=s.name_zh; selected.dataset.stickerId=s.id; selected.dataset.patternId=s.pattern_id; if(img){img.src=s.raw_url;img.alt=s.name_zh;}else{selected.textContent='';const ni=document.createElement('img');ni.alt=s.name_zh;ni.src=s.raw_url;selected.appendChild(ni);} applySticker(selected); },
+    hasSelection(){ return !!selected; },
+  });
+  window.__advStklibDispose = () => { try { stklib?.destroy?.(); } catch {} stklib = null; };
+  const stkToggle=sheet.querySelector('#stklibToggle');stkToggle.onclick=()=>{const host=sheet.querySelector('#stklibHost');const hidden=host.classList.toggle('collapsed');stkToggle.setAttribute('aria-expanded',String(!hidden));};
   sheet.querySelector('.adv-sticker-tools').onclick=e=>{const a=e.target.dataset.action;if(!a)return;if(a==='undo'){if(!history.length)return;future.push(snapshot());restore(history.pop());return;}if(a==='redo'){if(!future.length)return;history.push(snapshot());restore(future.pop());return;}if(!selected)return toast('先点选一枚贴纸');remember();if(a==='delete'){selected.remove();selected=null;return;}if(a==='copy'){addStickerFromData({...snapshot().find((_,i)=>canvas.children[i]===selected),x:parseFloat(selected.style.left)+4,y:parseFloat(selected.style.top)+4});return;}if(a==='smaller')selected.dataset.scale=Math.max(.3,+selected.dataset.scale-.1);if(a==='larger')selected.dataset.scale=Math.min(3,+selected.dataset.scale+.1);if(a==='rotate')selected.dataset.rotate=(+selected.dataset.rotate+15)%360;if(a==='fade')selected.dataset.opacity=Math.max(.2,+selected.dataset.opacity-.2);if(a==='back')selected.style.zIndex=Math.max(0,+selected.style.zIndex-1);if(a==='front')selected.style.zIndex=+selected.style.zIndex+1;applySticker(selected);};
   sheet.querySelector('#scrapExport').onclick=()=>{const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));const marks=snapshot().filter(s=>!s.src).map(s=>`<text x="${s.x*12}" y="${s.y*16}" font-size="${42*s.scale}" opacity="${s.opacity}" transform="rotate(${s.rotate} ${s.x*12} ${s.y*16})">${esc(s.char)}</text>`).join('');const lines=esc(text.value).split('\n').map((l,i)=>`<text x="100" y="${260+i*42}" font-size="25" fill="#3a2f28">${l}</text>`).join('');const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600"><rect width="100%" height="100%" fill="#f5ead2"/><rect x="55" y="55" width="1090" height="1490" fill="none" stroke="#9a6b35" stroke-width="3"/><text x="100" y="160" font-size="52" fill="#7d1f22">${esc(title.value||'冬日手账')}</text>${lines}${marks}</svg>`;const blob=new Blob([svg],{type:'image/svg+xml'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='christmas-scrapbook.svg';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
   sheet.querySelector('#scrapClose').onclick = closeMainOverlay; sheet.querySelector('#scrapSave').onclick = () => { localStorage.setItem('advent-v4-scrapbook', JSON.stringify({title:title.value.slice(0,200), text:text.value.slice(0,6000),paper:paper.value,wax:wax.value,tape:tape.value, stickers:snapshot()})); toast('手账草稿已保存'); closeMainOverlay(); };
