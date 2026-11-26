@@ -336,14 +336,8 @@ function showGiftCard(day, gifts, remoteExtras, sannanExtras, rect, doneFn, over
     if (el) giftSections.push({ el, title: entry.title || '三三追加', fresh: true });
   }
 
-  if (giftSections.length > 1) {
-    const folder = document.createElement('div'); folder.className = 'adv-accordion-folder';
-    const tabs = document.createElement('div'); tabs.className = 'adv-accordion-tabs';
-    giftSections.forEach(s=>{const seal=document.createElement('button');seal.type='button';seal.className='adv-envelope-seal';seal.innerHTML='<span>✦</span><b>轻触拆开火漆</b>';seal.onclick=()=>{s.el.classList.remove('sealed');s.el.classList.add('opened');};s.el.prepend(seal);s.el.classList.add('sealed');});
-    const select = i => giftSections.forEach((s,j)=>{s.el.classList.toggle('pulled',i===j);s.el.hidden=i!==j;tabs.children[j]?.classList.toggle('on',i===j);if(i===j&&!s.el.classList.contains('opened'))s.el.classList.add('sealed');});
-    giftSections.forEach((s,i)=>{const b=document.createElement('button');b.type='button';b.className='adv-accordion-tab';b.title=s.title;b.textContent=(s.fresh?'★ ':'')+(s.title.length>12?s.title.slice(0,12)+'…':s.title);b.onclick=()=>select(i);tabs.appendChild(b);});
-    folder.appendChild(tabs); body.prepend(folder); select(0);
-  }
+  /* ── 风琴包：组装文件夹 ── */
+  buildAccordion(body, giftSections);
 
   frame.appendChild(body);
 
@@ -435,6 +429,159 @@ function showSelfPreview(day, items) {
 }
 
 /* ── 渲染单个 item ────────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════
+   风琴包（Accordion Folder）
+   ─────────────────────────────────────────────────────────────────
+   · 单份礼物：隐藏文件夹底座，内容直接显示，无标签干扰
+   · 多份礼物：标签排 + 内容区，点标签弹出对应礼物
+   · 切换时旧内容先收回（push-down），新内容再弹出（pull-up）
+   · 每份礼物初始密封（封蜡面），点封蜡拆开才显示内容
+   ══════════════════════════════════════════════════════════════════ */
+function buildAccordion(body, sections) {
+  if (!sections.length) return;
+
+  const single = sections.length === 1;
+  let activeIdx = -1;
+  let switching = false;
+
+  /* ── 给每份礼物加封蜡密封 ── */
+  sections.forEach(s => {
+    const seal = document.createElement('button');
+    seal.type = 'button';
+    seal.className = 'adv-envelope-seal';
+    seal.setAttribute('aria-label', '轻触拆开火漆印章');
+    seal.innerHTML = `
+      <span>✦</span>
+      <b>${s.fresh ? '新收到的礼物' : (s.title || '礼物')}</b>
+      <small>轻触拆开火漆</small>`;
+    seal.onclick = e => {
+      e.stopPropagation();
+      s.el.classList.remove('sealed');
+      s.el.classList.add('opened');
+    };
+    s.el.prepend(seal);
+    s.el.classList.add('sealed');
+    s.el.hidden = true;
+  });
+
+  if (single) {
+    /* 单份：不建文件夹底座，直接展示，自动拆封 */
+    const s = sections[0];
+    s.el.hidden = false;
+    s.el.classList.add('pulled');
+    body.prepend(s.el);
+    /* 给用户一点感知时间再自动拆封 */
+    setTimeout(() => {
+      s.el.classList.remove('sealed');
+      s.el.classList.add('opened');
+    }, 350);
+    return;
+  }
+
+  /* ── 多份：建文件夹底座 + 标签排 ── */
+  const folder = document.createElement('div');
+  folder.className = 'adv-accordion-folder';
+
+  const tabBar = document.createElement('div');
+  tabBar.className = 'adv-accordion-tabs';
+  folder.appendChild(tabBar);
+
+  const contentWrap = document.createElement('div');
+  contentWrap.style.cssText = 'position:relative;overflow:hidden;min-height:40px;';
+  folder.appendChild(contentWrap);
+  sections.forEach(s => contentWrap.appendChild(s.el));
+
+  body.prepend(folder);
+
+  /* ── 标签：用 canvas 量文字像素宽再截断，避免中英文宽度不一 ── */
+  const _canvas = document.createElement('canvas');
+  const _ctx = _canvas.getContext('2d');
+  _ctx.font = '12px sans-serif';
+  const MAX_TAB_PX = 88; /* 对应 CSS max-width:130px 减去 padding */
+
+  function fitLabel(title, fresh) {
+    const prefix = fresh ? '★ ' : '';
+    let text = title;
+    while (text.length > 1 && _ctx.measureText(prefix + text + '…').width > MAX_TAB_PX) {
+      text = text.slice(0, -1);
+    }
+    const truncated = text.length < title.length;
+    return prefix + text + (truncated ? '…' : '');
+  }
+
+  sections.forEach((s, i) => {
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'adv-accordion-tab';
+    if (s.fresh) tab.dataset.fresh = 'true';
+    tab.title = s.title; /* 完整标题 hover 时在 tooltip 显示 */
+    tab.textContent = fitLabel(s.title, s.fresh);
+    tab.onclick = () => select(i);
+    tabBar.appendChild(tab);
+  });
+
+  /* ── 切换逻辑 ── */
+  function select(idx) {
+    if (switching) return;
+
+    if (idx === activeIdx) {
+      /* 点同一个标签 → 收起 */
+      switching = true;
+      collapse(activeIdx, () => {
+        activeIdx = -1;
+        switching = false;
+      });
+      return;
+    }
+
+    switching = true;
+    const prevIdx = activeIdx;
+
+    if (prevIdx >= 0) {
+      collapse(prevIdx, () => {
+        expand(idx);
+        switching = false;
+      });
+    } else {
+      expand(idx);
+      switching = false;
+    }
+  }
+
+  function expand(idx) {
+    activeIdx = idx;
+    const s = sections[idx];
+    Array.from(tabBar.children).forEach((t, i) =>
+      t.classList.toggle('on', i === idx));
+    s.el.hidden = false;
+    s.el.classList.remove('pushed');
+    /* rAF 确保 hidden:false 生效后再加动画类，首帧不会被跳过 */
+    requestAnimationFrame(() => s.el.classList.add('pulled'));
+  }
+
+  function collapse(idx, cb) {
+    const s = sections[idx];
+    tabBar.children[idx]?.classList.remove('on');
+
+    /* 防止 animationend + setTimeout 同时触发 cb */
+    let called = false;
+    const done = () => {
+      if (called) return;
+      called = true;
+      s.el.style.animation = '';
+      s.el.classList.remove('pulled');
+      s.el.hidden = true;
+      cb?.();
+    };
+
+    s.el.style.animation = 'adv-push-down .26s cubic-bezier(.4,0,.6,1) both';
+    s.el.addEventListener('animationend', done, { once: true });
+    setTimeout(done, 300); /* 比动画时长稍长，作为超时兜底 */
+  }
+
+  /* 入场后自动展开第一个 */
+  setTimeout(() => select(0), 80);
+}
 function renderItem(container, item, day, role, existingAnswer, giftId = '') {
   if (item.type === 'text') {
     const p = document.createElement('p');
