@@ -1288,7 +1288,9 @@ body.dusk .adv-stklib-fav, .adv-page.dusk .adv-stklib-fav { background: rgba(59,
 .adv-scrap-side { order: 2; }
 .adv-scrap-stage { order: 1; }
 @media (min-width: 820px) and (orientation: landscape) {
-  .adv-sheet:has(.adv-stklib-host) { width: min(1000px, 95vw); max-height: 92vh; overflow-y: auto; }
+  /* 手账素材库浮层较宽，必须占满视口；否则沿用 v4 书桌的 left:55% 会把右侧贴纸面板挤出屏幕 */
+  .adv-zoom:has(.adv-stklib-host) { left: 0; right: 0; width: auto; padding: 14px; justify-content: center; }
+  .adv-sheet:has(.adv-stklib-host) { width: min(1000px, 96vw); max-height: 92vh; overflow-y: auto; }
   .adv-sheet:has(.adv-stklib-host) .adv-frame { max-width: none; }
   .adv-sheet:has(.adv-stklib-host) .adv-scrap-body {
     display: grid; grid-template-columns: minmax(240px, 1fr) minmax(300px, 44%);

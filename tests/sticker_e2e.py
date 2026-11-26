@@ -240,6 +240,11 @@ def run_browser(pw, browser_type, label):
         page.wait_for_timeout(200)
         cols = page.evaluate("getComputedStyle(document.querySelector('.adv-scrap-body')).gridTemplateColumns")
         check(f'[{label}] 横屏双栏布局', cols and len(cols.split()) == 2, f'cols={cols}')
+        # 贴纸面板必须完整落在视口内（横屏 left:55% 老布局曾把面板挤出屏幕）
+        host_box = page.locator('#stklibHost').bounding_box()
+        check(f'[{label}] 横屏贴纸面板不溢出视口',
+              bool(host_box) and host_box['x'] >= 0 and host_box['x'] + host_box['width'] <= 1280 + 1,
+              str(host_box))
 
         # 竖屏窄屏：收纳册折叠按钮存在、无横向溢出
         page.set_viewport_size({'width': 390, 'height': 844})
