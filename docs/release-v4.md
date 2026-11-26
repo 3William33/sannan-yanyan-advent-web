@@ -1,0 +1,19 @@
+# V4 发布与回滚
+
+## 发布
+
+1. 在 `v4-double-cabin-desk` 分支运行 `node --check app.js && node --check backend.js && node --check house.js`。
+2. 用虚构数据启动静态服务器，检查桌面端和手机端；不要把 `builtin-gifts.js` 解码内容写入日志或截图。
+3. 合并到经过确认的发布分支后部署 GitHub Pages。礼物仓库保持独立，不随网页部署自动改写。
+
+## 回滚
+
+网页回滚只需将 Pages 指向上一个网页提交；浏览器旧存档仍使用 `advent-web-save-v1`，新增字段均为可选，不需要清空存档。若发现本地 V4 草稿异常，只删除 `advent-v4-draft:*` 和 `advent-v4-scrapbook`，不要删除正式存档键。
+
+## 验证矩阵
+
+已完成 JavaScript 语法检查、diff 空白检查与 Chromium 视口冒烟测试：1920×1080、1440×900、1366×768、1024×768、768×1024、744×1133、1133×744、390×844。完整虚构数据 E2E 为 43/43，通过音乐/预览/偷看专项 26/26，通过显示模式/流畅模式/离线专项 24/24。测试不会读取、下载或解码真实礼物。当前 Linux 环境缺少 WebKit 所需 GTK/Graphene/Manette 库，因此 WebKit 自动化明确标记为未执行；这也不能替代真实 iPad Safari 实机测试。
+
+## 架构边界
+
+GitHub Pages 静态站点不能提供真正的服务端秘密保护或安全双向并发写入；现有 XOR+Base64 仍只是混淆，PAT 仅保存在 sessionStorage。回信、收藏和手账草稿当前为浏览器本地数据，不会假装已同步到礼物仓库。

@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # 针对性回归测试：第6格筹备期不亮灯、显示模式、流畅模式、离线提示、性能优化。
 # 全部使用虚构数据，不读取/打印/修改任何真实礼物，不清除真实存档。
-import sys, json, base64, re
+import os, sys, json, base64, re
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
 from mock_data import encode as me, wrapper as mw, YAN_DIGEST, SAN_DIGEST
 
-SITE = 'http://localhost:8024/sannan-yanyan-advent-web/'
+SITE = os.environ.get('ADVENT_SITE', 'http://localhost:8024/')
 DATA = 'http://localhost:8025/data'
 SAVE_KEY = 'advent-web-save-v1'
 

@@ -15,6 +15,20 @@ import { Backend } from './backend.js?v=705ecd1';
 /* ── 常量 ─────────────────────────────────────────────────────────── */
 const TZ = 'Asia/Shanghai';
 const YEAR = 2026;
+const BIRTHDAY = { month: 12, day: 25 };
+
+function shanghaiDateParts() {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(new Date());
+  const out = {}; for (const p of parts) if (p.type !== 'literal') out[p.type] = Number(p.value);
+  return out;
+}
+function daysUntilBirthday() {
+  const p = shanghaiDateParts();
+  const todayUtc = Date.UTC(p.year, p.month - 1, p.day);
+  let targetUtc = Date.UTC(p.year, BIRTHDAY.month - 1, BIRTHDAY.day);
+  if (targetUtc < todayUtc) targetUtc = Date.UTC(p.year + 1, BIRTHDAY.month - 1, BIRTHDAY.day);
+  return Math.round((targetUtc - todayUtc) / 86400000);
+}
 
 /* ── 时间工具 ─────────────────────────────────────────────────────── */
 // 夜间判断统一由 backend 按 Asia/Shanghai + 显示模式计算，避免设备时区差异与重复逻辑
@@ -35,6 +49,14 @@ function toast(msg, ms = 3000) {
 /* ── 状态 ────────────────────────────────────────────────────────── */
 let board = null;
 let houseCtrl = null;
+
+function closeMainOverlay() {
+  const overlay = document.getElementById('overlay');
+  if (!overlay) return;
+  overlay.classList.remove('on');
+  overlay.style.display = 'none';
+  overlay.innerHTML = '';
+}
 
 /* ── 房子挂载 ────────────────────────────────────────────────────── */
 function mountStage() {
@@ -70,6 +92,22 @@ function refresh() {
   document.getElementById('topDay').textContent = today || '—';
   const opened = cells.filter(c => Object.values(c.opened_by || {}).length > 0).length;
   document.getElementById('topStars').textContent = `★ ${opened} · 三三 ${peekCounts.san || 0} / 砚砚 ${peekCounts.yan || 0}`;
+
+  // 书桌默认态：不改变旧协议，只把已有看板信息投影成实体物件
+  const deskDay = document.getElementById('deskDay');
+  const deskDate = document.getElementById('deskDate');
+  const deskCountdown = document.getElementById('deskCountdown');
+  const deskMailStatus = document.getElementById('deskMailStatus');
+  if (deskDay) deskDay.textContent = today || '—';
+  if (deskDate) deskDate.textContent = today ? `12 月 ${today} 日 · 北京时间` : '十二月 · 北京时间';
+  if (deskCountdown) {
+    const birthdayDays = daysUntilBirthday();
+    deskCountdown.textContent = birthdayDays === 0 ? '圣诞快乐 · 生日快乐 🎂' : `距离圣诞与生日还有 ${birthdayDays} 天`;
+  }
+  if (deskMailStatus) {
+    const incoming = cells.reduce((n, c) => n + (c.new_count || 0), 0);
+    deskMailStatus.textContent = incoming ? `${incoming} 件新礼物 / 追加礼物` : `${opened} 扇窗已点亮`;
+  }
 
   // 偷看提示
   const peekEl = document.getElementById('peekLine');
@@ -251,42 +289,60 @@ function showGiftCard(day, gifts, remoteExtras, sannanExtras, rect, doneFn, over
   /* 礼物内容区 */
   const body = document.createElement('div');
   body.className = 'adv-body';
+  const giftSections = [];
 
   /* 渲染砚砚的礼物 */
   const yanGift = gifts?.ai;
   if (yanGift) {
+    const yanSection = document.createElement('section');
+    yanSection.className = 'adv-envelope-content';
     const pic = document.createElement('div');
     pic.className = 'adv-pic';
     const iconKey = kindToIcon(yanGift.kind || yanGift.icon);
     pic.innerHTML = iconSvg(iconKey);
-    frame.appendChild(pic); // body 稍后才 append，这里直接追加即可保持顺序
+    yanSection.appendChild(pic);
 
     for (const item of yanGift.items || []) {
-      renderItem(body, item, day, 'ai', yanGift.answer, yanGift.id || `builtin-yan-${day}`);
+      renderItem(yanSection, item, day, 'ai', yanGift.answer, yanGift.id || `builtin-yan-${day}`);
     }
 
     if (yanGift.note) {
       const note = document.createElement('div');
       note.className = 'adv-note';
       note.textContent = yanGift.note;
-      frame.appendChild(note);
+      yanSection.appendChild(note);
     }
+    appendMemoryActions(yanSection, yanGift.id || `builtin-yan-${day}`, day);
+    body.appendChild(yanSection);
+    giftSections.push({ el: yanSection, title: yanGift.title || '砚砚的礼物', fresh: false });
   }
 
   /* 砚砚的远程追加 */
   for (const entry of remoteExtras) {
-    renderRemoteEntry(body, entry, '砚砚后来追加', day);
+    const el = renderRemoteEntry(body, entry, '砚砚后来追加', day);
+    if (el) giftSections.push({ el, title: entry.title || '追加礼物', fresh: true });
   }
 
   /* 三三本地礼物 */
   const sanEntries = gifts?.human_entries || (gifts?.human ? [gifts.human] : []);
   for (const sanGift of sanEntries) {
-    renderHalf(body, sanGift, '三三放进来的');
+    const el = renderHalf(body, sanGift, '三三放进来的');
+    if (el) giftSections.push({ el, title: sanGift.title || '三三的礼物', fresh: false });
   }
 
   /* 三三的远程礼物 */
   for (const entry of sannanExtras) {
-    renderRemoteEntry(body, entry, '三三放进来的', day);
+    const el = renderRemoteEntry(body, entry, '三三放进来的', day);
+    if (el) giftSections.push({ el, title: entry.title || '三三追加', fresh: true });
+  }
+
+  if (giftSections.length > 1) {
+    const folder = document.createElement('div'); folder.className = 'adv-accordion-folder';
+    const tabs = document.createElement('div'); tabs.className = 'adv-accordion-tabs';
+    giftSections.forEach(s=>{const seal=document.createElement('button');seal.type='button';seal.className='adv-envelope-seal';seal.innerHTML='<span>✦</span><b>轻触拆开火漆</b>';seal.onclick=()=>{s.el.classList.remove('sealed');s.el.classList.add('opened');};s.el.prepend(seal);s.el.classList.add('sealed');});
+    const select = i => giftSections.forEach((s,j)=>{s.el.classList.toggle('pulled',i===j);s.el.hidden=i!==j;tabs.children[j]?.classList.toggle('on',i===j);if(i===j&&!s.el.classList.contains('opened'))s.el.classList.add('sealed');});
+    giftSections.forEach((s,i)=>{const b=document.createElement('button');b.type='button';b.className='adv-accordion-tab';b.title=s.title;b.textContent=(s.fresh?'★ ':'')+(s.title.length>12?s.title.slice(0,12)+'…':s.title);b.onclick=()=>select(i);tabs.appendChild(b);});
+    folder.appendChild(tabs); body.prepend(folder); select(0);
   }
 
   frame.appendChild(body);
@@ -466,6 +522,20 @@ function renderItem(container, item, day, role, existingAnswer, giftId = '') {
     return;
   }
 
+  if (item.type === 'photo' || item.photo) {
+    renderPhoto(container, item.photo || item, item.name || '一张冬日照片');
+    return;
+  }
+
+  if (item.type === 'comic' || item.comic) {
+    renderComic(container, item.comic || item, item.name || '冬日绘本');
+    return;
+  }
+
+  if (item.type === 'scrapbook' && item.layout) {
+    const page=document.createElement('div');page.className=`adv-scrap-read paper-${item.layout.paper||'cream'}`;const h=document.createElement('h3');h.textContent=item.layout.title||'冬日手账';const p=document.createElement('p');p.textContent=item.layout.text||'';page.append(h,p);for(const s of item.layout.stickers||[]){const mark=document.createElement('span');mark.style.left=s.x+'%';mark.style.top=s.y+'%';mark.style.opacity=s.opacity??1;mark.style.zIndex=s.z||2;mark.style.transform=`translate(-50%,-50%) scale(${s.scale||1}) rotate(${s.rotate||0}deg)`;if(s.src){const im=document.createElement('img');im.alt='手账贴纸';Backend.resolveMediaUrl(s.src).then(src=>{if(src)im.src=src;});mark.appendChild(im);}else mark.textContent=s.char;page.appendChild(mark);}container.appendChild(page);return;
+  }
+
   if ((item.type === 'voice' || item.type === 'audio') && item.url) {
     (async () => {
       const src = await Backend.resolveMediaUrl(item.url);
@@ -499,6 +569,37 @@ function renderItem(container, item, day, role, existingAnswer, giftId = '') {
   }
 }
 
+function renderPhoto(container, photo, title) {
+  const holder = document.createElement('div'); holder.className = 'adv-photo-holder';
+  const wrap = document.createElement('button');
+  wrap.type = 'button'; wrap.className = 'adv-photo3d'; wrap.setAttribute('aria-label', '翻转照片');
+  const front = document.createElement('span'); front.className = `adv-photo-face adv-photo-front frame-${photo?.front?.frame||'polaroid'}`;
+  const back = document.createElement('span'); back.className = 'adv-photo-face adv-photo-back';
+  const img = document.createElement('img'); img.alt = title; img.loading = 'lazy';
+  img.style.objectFit=photo?.front?.fit||'cover';img.style.objectPosition=`${photo?.front?.positionX??50}% ${photo?.front?.positionY??50}%`;
+  const url = photo?.front?.url || photo?.url;
+  if (url) Backend.resolveMediaUrl(url).then(src => { if (src) img.src = src; });
+  front.append(img, Object.assign(document.createElement('small'), { textContent: photo?.front?.title || title }));
+  back.textContent = photo?.back?.text || '背面还没有留言';
+  wrap.append(front, back); wrap.onclick = () => wrap.classList.toggle('flipped'); holder.appendChild(wrap);
+  const controls=document.createElement('div');controls.className='adv-photo-export';
+  const frontBtn=document.createElement('button');frontBtn.className='adv-btn';frontBtn.textContent='导出正面';frontBtn.onclick=async()=>{const src=await Backend.resolveMediaUrl(url);if(src){const a=document.createElement('a');a.href=src;a.target='_blank';a.rel='noopener';a.download='photo-front';a.click();}};
+  const backBtn=document.createElement('button');backBtn.className='adv-btn';backBtn.textContent='导出背面';backBtn.onclick=()=>{const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900"><rect width="100%" height="100%" fill="#f8efd9"/><rect x="45" y="45" width="1110" height="810" fill="none" stroke="#9a6b35" stroke-width="3"/><text x="90" y="130" font-size="38" fill="#6b4423">${esc(photo?.back?.date||'')}</text><foreignObject x="90" y="180" width="1020" height="570"><div xmlns="http://www.w3.org/1999/xhtml" style="font:34px serif;color:#6b4423;white-space:pre-wrap;line-height:1.8">${esc(photo?.back?.text||'背面还没有留言')}</div></foreignObject><text x="900" y="800" font-size="38" fill="#6b4423">${esc(photo?.back?.signature||'')}</text></svg>`;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'}));a.download='photo-back.svg';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
+  controls.append(frontBtn,backBtn);holder.appendChild(controls);container.appendChild(holder);
+}
+
+function renderComic(container, comic, title) {
+  const pages = Array.isArray(comic?.pages) ? comic.pages : [];
+  if (!pages.length) return;
+  const reader=document.createElement('div');reader.className=`adv-comic-reader mode-${comic.mode||'pages'}`;const viewport=document.createElement('div');viewport.className='adv-comic-viewport';const controls=document.createElement('div');controls.className='adv-comic-controls';const caption=document.createElement('span');caption.className='adv-hint';let index=0,zoom=1,startX=0;
+  const prev=document.createElement('button');prev.className='adv-btn';prev.textContent='‹';const next=document.createElement('button');next.className='adv-btn';next.textContent='›';const zoomBtn=document.createElement('button');zoomBtn.className='adv-btn';zoomBtn.textContent='放大';const immersive=document.createElement('button');immersive.className='adv-btn';immersive.textContent='沉浸阅读';
+  const resolvePage=async p=>p?.url?await Backend.resolveMediaUrl(p.url):null;
+  const draw=async()=>{viewport.innerHTML='';const mode=comic.mode||'pages';caption.textContent=`${title} · ${index+1}/${pages.length}`;reader.dataset.zoom=zoom;viewport.style.setProperty('--comic-zoom',zoom);if(mode==='scroll'||mode==='strip'){for(const [i,p] of pages.entries()){const src=await resolvePage(p);if(!src)continue;const img=document.createElement('img');img.src=src;img.alt=p.alt||`${title} ${i+1}`;img.loading='lazy';viewport.appendChild(img);}caption.textContent=`${title} · ${pages.length} 页`;}else{const visible=mode==='spread'?[pages[index],pages[(index+1)%pages.length]]:[pages[index]];for(const [i,p] of visible.entries()){const src=await resolvePage(p);if(!src)continue;const img=document.createElement('img');img.src=src;img.alt=p.alt||`${title} ${index+i+1}`;img.loading='lazy';viewport.appendChild(img);}}};
+  prev.onclick=()=>{index=(index+(comic.mode==='spread'?-2:-1)+pages.length)%pages.length;draw();};next.onclick=()=>{index=(index+(comic.mode==='spread'?2:1))%pages.length;draw();};zoomBtn.onclick=()=>{zoom=zoom>=2?1:zoom+.5;zoomBtn.textContent=zoom===1?'放大':`${zoom}×`;draw();};immersive.onclick=()=>{reader.classList.toggle('immersive');immersive.textContent=reader.classList.contains('immersive')?'退出沉浸':'沉浸阅读';};
+  viewport.onpointerdown=e=>{startX=e.clientX;};viewport.onpointerup=e=>{const dx=e.clientX-startX;if(Math.abs(dx)>50&&(comic.mode==='pages'||comic.mode==='spread'))(dx<0?next:prev).click();};
+  controls.append(prev,caption,next,zoomBtn,immersive);reader.append(viewport,controls);container.appendChild(reader);draw();
+}
+
 function appendMediaCaption(container, item) {
       if (item.name) {
         const cap = document.createElement('div');
@@ -509,12 +610,12 @@ function appendMediaCaption(container, item) {
 }
 
 function renderRemoteEntry(container, entry, label, day) {
-  if (!entry) return;
+  if (!entry) return null;
   const source = Array.isArray(entry.items_v2) && entry.items_v2.length
     ? entry.items_v2
     : (Array.isArray(entry.items) && entry.items.length ? entry.items : legacyEntryItems(entry));
-  const items = source.filter(item => item && ['text', 'question', 'song', 'abc', 'image', 'voice', 'audio', 'attachment'].includes(item.type));
-  if (!items.length) return;
+  const items = source.filter(item => item && ['text', 'question', 'song', 'abc', 'image', 'photo', 'comic', 'scrapbook', 'voice', 'audio', 'attachment'].includes(item.type));
+  if (!items.length) return null;
   const half = document.createElement('div');
   half.className = 'adv-half';
   const lbl = document.createElement('div');
@@ -525,7 +626,103 @@ function renderRemoteEntry(container, entry, label, day) {
   for (const item of items) {
     renderItem(half, item, day, entry.from || 'remote', entry.answer || '', entry.id || '');
   }
+  appendMemoryActions(half, entry.id || `${day}-${label}`, day);
   container.appendChild(half);
+  return half;
+}
+
+function appendMemoryActions(container, id, day) {
+  const key = `advent-v4-favorite:${id}`;
+  const row = document.createElement('div'); row.className = 'adv-memory-actions';
+  const fav = document.createElement('button'); fav.className = 'adv-btn';
+  const sync = () => { fav.textContent = Backend.getCompanion().favorites[id] ? '★ 已收藏' : '☆ 收藏'; };
+  fav.onclick = () => { const exists=Backend.getCompanion().favorites[id];Backend.setCompanion('favorites',id,exists?null:{id,day});sync(); };
+  const reply = document.createElement('button'); reply.className = 'adv-btn'; reply.textContent = '↩ 写回信';
+  reply.onclick = () => openReplyComposer(id, day);
+  row.append(fav, reply); sync(); container.appendChild(row);
+}
+
+function openDeskSheet(title, subtitle='Christmas desk') {
+  const overlay=document.getElementById('overlay');overlay.innerHTML='';overlay.style.display='flex';overlay.classList.add('on');
+  const sheet=document.createElement('div');sheet.className='adv-sheet adv-paper';const frame=document.createElement('div');frame.className='adv-frame';
+  frame.innerHTML=`<div class="adv-ctop"><span class="d"></span><span class="by"></span></div>`;frame.querySelector('.d').textContent=title;frame.querySelector('.by').textContent=subtitle;
+  const body=document.createElement('div');body.className='adv-body adv-desk-sheet-body';const row=document.createElement('div');row.className='adv-row';const close=document.createElement('button');close.className='adv-btn';close.textContent='关上';close.onclick=closeMainOverlay;row.appendChild(close);frame.append(body,row);sheet.appendChild(frame);overlay.appendChild(sheet);overlay.onclick=e=>{if(e.target===overlay)closeMainOverlay();};return {body,row};
+}
+
+function openTodayNote() {
+  const {body,row}=openDeskSheet('今日便签','petit mot');const key=`${Backend.getWho()}:${Backend.shanghaiNowIso().slice(0,10)}`;
+  const ta=document.createElement('textarea');ta.className='adv-ta adv-today-note';ta.maxLength=280;ta.placeholder='留一句简短的冬日留言…';ta.value=Backend.getCompanion().notes[key]?.text||'';
+  const save=document.createElement('button');save.className='adv-btn solid';save.textContent='贴到桌上';save.onclick=()=>{Backend.setCompanion('notes',key,{text:ta.value.slice(0,280),who:Backend.getWho()});toast('今日便签已贴好，下次发布会同步');closeMainOverlay();};body.appendChild(ta);row.appendChild(save);
+}
+
+function openPhotoFrame() {
+  const {body,row}=openDeskSheet('桌面相框','photo frame');const key=Backend.getWho();let data=Backend.getCompanion().frames[key]||{};
+  const card=document.createElement('div');card.className='adv-frame-photo-card';const front=document.createElement('div');front.className='adv-frame-photo-front';const img=document.createElement('img');img.alt='桌面相框';front.appendChild(img);const back=document.createElement('div');back.className='adv-frame-photo-back';back.textContent=data.note||'照片背面还没有留言';card.append(front,back);card.onclick=()=>card.classList.toggle('flipped');
+  const upload=document.createElement('input');upload.type='file';upload.accept='image/png,image/jpeg,image/webp';upload.className='adv-file';const note=document.createElement('textarea');note.className='adv-ta';note.placeholder='写在照片背面的留言';note.value=data.note||'';let src=data.src||'';if(src)Backend.resolveMediaUrl(src).then(u=>{if(u)img.src=u;});upload.onchange=async e=>{const f=e.target.files?.[0];if(!f||f.size>3*1024*1024)return toast('照片需小于 3MB');try{const up=await Backend.uploadFile(f);src=up.url;img.src=await Backend.resolveMediaUrl(src);}catch(err){toast(err.message);}};
+  const save=document.createElement('button');save.className='adv-btn solid';save.textContent='放进相框';save.onclick=()=>{try{Backend.setCompanion('frames',key,{src,note:note.value.slice(0,1000)});toast('相框已更新，下次发布会同步');closeMainOverlay();}catch{toast('照片太大，无法保存在浏览器');}};body.append(card,upload,note);row.appendChild(save);
+}
+
+function openPostOffice() {
+  const {body}=openDeskSheet('圣诞邮局','Christmas post');const b=Backend.getBoard();const list=document.createElement('div');list.className='adv-post-list';
+  const favorites=Object.values(Backend.getCompanion().favorites||{});
+  const opened=(b.cells||[]).filter(c=>Object.keys(c.opened_by||{}).length);const newCount=(b.cells||[]).reduce((n,c)=>n+(c.new_count||0),0);
+  list.innerHTML=`<div class="adv-post-summary"><b>${newCount}</b><span>新礼物与追加</span><b>${opened.length}</b><span>已开启日期</span><b>${favorites.length}</b><span>收藏</span></div>`;
+  opened.forEach(c=>{const item=document.createElement('button');item.type='button';item.className='adv-post-item';item.innerHTML=`<span>${c.day} déc.</span><small>${c.new_count?`${c.new_count} 件未读追加`:'窗户已经点亮'}</small>`;item.onclick=()=>{closeMainOverlay();onWindowTap(c.day);};list.appendChild(item);});
+  if(favorites.length){const h=document.createElement('h3');h.textContent='收藏夹';list.appendChild(h);favorites.forEach(f=>{const p=document.createElement('p');p.className='adv-favorite-line';p.textContent=`★ ${f.day?`12月${f.day}日 · `:''}${f.id||'礼物'}`;list.appendChild(p);});}body.appendChild(list);
+}
+
+function openRecordPlayer() {
+  const {body}=openDeskSheet('圣诞唱片机','music for us');const player=document.getElementById('deskAudio');
+  const controls=document.createElement('div');controls.className='adv-record-player';controls.innerHTML='<div class="adv-record-disc">♫</div><button class="adv-btn" type="button">播放 / 暂停</button><label>音量 <input type="range" min="0" max="1" step="0.05"></label><div class="adv-record-list"></div>';
+  const play=controls.querySelector('button'),volume=controls.querySelector('input'),list=controls.querySelector('.adv-record-list');const savedVolume=Number(localStorage.getItem('advent-v4-volume'));if(Number.isFinite(savedVolume))player.volume=Math.max(0,Math.min(1,savedVolume));volume.value=player.volume;play.onclick=()=>player.src?(player.paused?player.play().catch(()=>toast('请再次点击播放')):player.pause()):toast('先从下面选择一段音频');volume.oninput=()=>{player.volume=+volume.value;localStorage.setItem('advent-v4-volume',volume.value);};
+  const tracks=[];for(const c of board?.cells||[]){if(!Object.keys(c.opened_by||{}).length)continue;const entries=[c.gifts?.ai,...(c.gifts?.human_entries||[])].filter(Boolean);for(const e of entries)for(const it of e.items_v2||e.items||[])if(['audio','voice'].includes(it.type)&&it.url)tracks.push({day:c.day,name:it.name||`12月${c.day}日的声音`,url:it.url});}
+  if(!tracks.length){const p=document.createElement('p');p.className='adv-hint';p.textContent='已开启的礼物里还没有可直接播放的音频。Spotify/网易云仍从礼物中的播放器打开。';list.appendChild(p);}tracks.forEach(t=>{const b=document.createElement('button');b.type='button';b.className='adv-post-item';b.textContent=t.name;b.onclick=async()=>{const src=await Backend.resolveMediaUrl(t.url);if(src){player.src=src;player.dataset.track=t.name;player.play().catch(()=>toast('Safari 需要再次点击播放'));controls.querySelector('.adv-record-disc').classList.add('playing');}};list.appendChild(b);});player.onplay=()=>controls.querySelector('.adv-record-disc')?.classList.add('playing');player.onpause=()=>controls.querySelector('.adv-record-disc')?.classList.remove('playing');if(!player.paused)controls.querySelector('.adv-record-disc').classList.add('playing');body.appendChild(controls);
+}
+
+function openReplyComposer(id, day) {
+  const overlay = document.getElementById('overlay'); overlay.innerHTML = ''; overlay.style.display = 'flex'; overlay.classList.add('on');
+  const sheet = document.createElement('div'); sheet.className = 'adv-sheet adv-paper';
+  sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">写一封回信</span><span class="by">reply</span></div><p class="adv-editor-intro">这封回信只关联原礼物，不会改写对方的内容。</p></div>';
+  const frame = sheet.querySelector('.adv-frame'); const ta = document.createElement('textarea'); ta.className = 'adv-ta'; ta.placeholder = '想对这份礼物说什么？';
+  const saved = localStorage.getItem(`advent-v4-reply:${id}`); if (saved) ta.value = saved;
+  const row = document.createElement('div'); row.className = 'adv-row'; const close = document.createElement('button'); close.className = 'adv-btn'; close.textContent = '关上';
+  const save = document.createElement('button'); save.className = 'adv-btn solid'; save.textContent = '保存回信';
+  close.onclick = closeMainOverlay; save.onclick = () => { try { Backend.reply(day, id, ta.value); localStorage.removeItem(`advent-v4-reply:${id}`); board=Backend.getBoard(); refresh(); toast('回信已封好，可随下一次发布同步'); closeMainOverlay(); } catch(e) { toast(e.message); } };
+  frame.append(ta, row); row.append(close, save); overlay.appendChild(sheet); overlay.onclick = e => { if (e.target === overlay) closeMainOverlay(); };
+}
+
+function openScrapbook() {
+  const overlay = document.getElementById('overlay'); overlay.innerHTML = ''; overlay.style.display = 'flex'; overlay.classList.add('on');
+  const sheet = document.createElement('div'); sheet.className = 'adv-sheet adv-paper';
+  sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">手账抽屉</span><span class="by">scrapbook</span></div><p class="adv-editor-intro">拖动贴纸，留下今天的页面。草稿只保存在当前浏览器。</p><label class="adv-lab">礼物日期</label><input class="adv-in1" id="scrapDay" type="number" min="1" max="25" value="1"><label class="adv-lab">信纸标题</label><input class="adv-in1" id="scrapTitle" placeholder="十二月的某一天"><label class="adv-lab">正文</label><textarea class="adv-ta" id="scrapText" placeholder="写一点冬天的事…"></textarea><div class="adv-sticker-tray"><button type="button" data-sticker="★">★</button><button type="button" data-sticker="❄">❄</button><button type="button" data-sticker="♡">♡</button><button type="button" data-sticker="🍪">🍪</button><label class="adv-sticker-upload">＋ PNG<input id="stickerUpload" type="file" accept="image/png,image/webp" hidden></label></div><div class="adv-sticker-tools"><button type="button" data-action="smaller">−</button><button type="button" data-action="larger">＋</button><button type="button" data-action="rotate">↻</button><button type="button" data-action="fade">◐</button><button type="button" data-action="back">↓</button><button type="button" data-action="front">↑</button><button type="button" data-action="copy">复制</button><button type="button" data-action="delete">删除</button><button type="button" data-action="undo">撤销</button><button type="button" data-action="redo">重做</button></div><div class="adv-scrap-canvas" id="scrapCanvas"></div><div class="adv-row"><button class="adv-btn" id="scrapExport">导出图片</button><button class="adv-btn" id="scrapClose">关上</button><button class="adv-btn" id="scrapSave">保存草稿</button><button class="adv-btn solid" id="scrapPublish">封成礼物</button></div></div>';
+  overlay.appendChild(sheet);
+  const title = sheet.querySelector('#scrapTitle'), text = sheet.querySelector('#scrapText'), canvas = sheet.querySelector('#scrapCanvas');
+  const tray=sheet.querySelector('.adv-sticker-tray');tray.insertAdjacentHTML('beforebegin','<div class="adv-scrap-materials"><label>信纸<select id="scrapPaper"><option value="cream">奶油复古</option><option value="kraft">牛皮纸</option><option value="grid">格纹纸</option><option value="snow">雪花信纸</option><option value="botanical">圣诞植物边框</option><option value="blank">简洁空白</option></select></label><label>火漆<select id="scrapWax"><option value="wine">酒红</option><option value="gold">柔金</option><option value="green">松绿</option></select></label><label>胶带<select id="scrapTape"><option value="paper">牛皮纸胶带</option><option value="transparent">半透明胶带</option><option value="holly">冬青胶带</option></select></label></div>');
+  const paper=sheet.querySelector('#scrapPaper'),wax=sheet.querySelector('#scrapWax'),tape=sheet.querySelector('#scrapTape');paper.onchange=()=>{canvas.dataset.paper=paper.value;};
+  let selected = null, history = [], future = [];
+  const snapshot = () => [...canvas.children].map(b=>({char:b.dataset.char||'',src:b.dataset.src||'',x:parseFloat(b.style.left),y:parseFloat(b.style.top),scale:+(b.dataset.scale||1),rotate:+(b.dataset.rotate||0),opacity:+(b.dataset.opacity||1),z:+(b.style.zIndex||1)}));
+  const remember = () => { history.push(snapshot()); if (history.length > 40) history.shift(); future = []; };
+  const restore = list => { canvas.innerHTML=''; selected=null; (list||[]).forEach(addStickerFromData); };
+  try { const d = JSON.parse(localStorage.getItem('advent-v4-scrapbook') || 'null'); if (d) { title.value = d.title || ''; text.value = d.text || '';paper.value=d.paper||'cream';wax.value=d.wax||'wine';tape.value=d.tape||'paper';canvas.dataset.paper=paper.value;restore(d.stickers || []); } } catch {}
+  function applySticker(b) { b.style.transform=`translate(-50%,-50%) scale(${b.dataset.scale||1}) rotate(${b.dataset.rotate||0}deg)`; b.style.opacity=b.dataset.opacity||1; }
+  function addStickerFromData(s) { addSticker(s.char||'',s.x??50,s.y??50,s); }
+  function addSticker(char,x=50,y=50,data={}) {
+    const b=document.createElement('button');b.type='button';b.className='adv-sticker';b.dataset.char=char;b.dataset.src=data.src||'';b.dataset.scale=data.scale||1;b.dataset.rotate=data.rotate||0;b.dataset.opacity=data.opacity??1;b.style.left=x+'%';b.style.top=y+'%';b.style.zIndex=data.z||1;
+    if(data.src){const img=document.createElement('img');img.alt='自定义贴纸';if(data.preview)img.src=data.preview;else Backend.resolveMediaUrl(data.src).then(src=>{if(src)img.src=src;});b.appendChild(img);}else b.textContent=char;applySticker(b);
+    b.onclick=()=>{selected?.classList.remove('selected');selected=b;b.classList.add('selected');};
+    const points=new Map();let gesture=null;
+    b.onpointerdown=e=>{if(!points.size)remember();b.onclick();points.set(e.pointerId,{x:e.clientX,y:e.clientY});b.setPointerCapture(e.pointerId);if(points.size===2){const [a,c]=[...points.values()];gesture={distance:Math.hypot(c.x-a.x,c.y-a.y),angle:Math.atan2(c.y-a.y,c.x-a.x),scale:+b.dataset.scale,rotate:+b.dataset.rotate};}};
+    b.onpointermove=e=>{if(!points.has(e.pointerId))return;points.set(e.pointerId,{x:e.clientX,y:e.clientY});if(points.size===1){const r=canvas.getBoundingClientRect();b.style.left=Math.max(0,Math.min(100,(e.clientX-r.left)/r.width*100))+'%';b.style.top=Math.max(0,Math.min(100,(e.clientY-r.top)/r.height*100))+'%';}else if(points.size===2&&gesture){const [a,c]=[...points.values()];const distance=Math.hypot(c.x-a.x,c.y-a.y),angle=Math.atan2(c.y-a.y,c.x-a.x);b.dataset.scale=clampNumber(gesture.scale*distance/Math.max(1,gesture.distance),.2,4);b.dataset.rotate=gesture.rotate+(angle-gesture.angle)*180/Math.PI;applySticker(b);}};
+    const end=e=>{points.delete(e.pointerId);if(points.size<2)gesture=null;};b.onpointerup=end;b.onpointercancel=end;canvas.appendChild(b);
+  }
+  function clampNumber(n,min,max){return Math.max(min,Math.min(max,Number(n)||min));}
+  sheet.querySelectorAll('[data-sticker]').forEach(b => b.onclick = () => addSticker(b.dataset.sticker));
+  sheet.querySelector('#stickerUpload').onchange=async e=>{const f=e.target.files?.[0];if(!f||f.size>2*1024*1024)return toast('贴纸需为 2MB 以内的 PNG/WebP');try{const uploaded=await Backend.uploadFile(f);const preview=await Backend.resolveMediaUrl(uploaded.url);remember();addSticker('',50,50,{src:uploaded.url,preview});}catch(err){toast(err.message);}};
+  sheet.querySelector('.adv-sticker-tools').onclick=e=>{const a=e.target.dataset.action;if(!a)return;if(a==='undo'){if(!history.length)return;future.push(snapshot());restore(history.pop());return;}if(a==='redo'){if(!future.length)return;history.push(snapshot());restore(future.pop());return;}if(!selected)return toast('先点选一枚贴纸');remember();if(a==='delete'){selected.remove();selected=null;return;}if(a==='copy'){addStickerFromData({...snapshot().find((_,i)=>canvas.children[i]===selected),x:parseFloat(selected.style.left)+4,y:parseFloat(selected.style.top)+4});return;}if(a==='smaller')selected.dataset.scale=Math.max(.3,+selected.dataset.scale-.1);if(a==='larger')selected.dataset.scale=Math.min(3,+selected.dataset.scale+.1);if(a==='rotate')selected.dataset.rotate=(+selected.dataset.rotate+15)%360;if(a==='fade')selected.dataset.opacity=Math.max(.2,+selected.dataset.opacity-.2);if(a==='back')selected.style.zIndex=Math.max(0,+selected.style.zIndex-1);if(a==='front')selected.style.zIndex=+selected.style.zIndex+1;applySticker(selected);};
+  sheet.querySelector('#scrapExport').onclick=()=>{const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));const marks=snapshot().filter(s=>!s.src).map(s=>`<text x="${s.x*12}" y="${s.y*16}" font-size="${42*s.scale}" opacity="${s.opacity}" transform="rotate(${s.rotate} ${s.x*12} ${s.y*16})">${esc(s.char)}</text>`).join('');const lines=esc(text.value).split('\n').map((l,i)=>`<text x="100" y="${260+i*42}" font-size="25" fill="#3a2f28">${l}</text>`).join('');const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600"><rect width="100%" height="100%" fill="#f5ead2"/><rect x="55" y="55" width="1090" height="1490" fill="none" stroke="#9a6b35" stroke-width="3"/><text x="100" y="160" font-size="52" fill="#7d1f22">${esc(title.value||'冬日手账')}</text>${lines}${marks}</svg>`;const blob=new Blob([svg],{type:'image/svg+xml'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='christmas-scrapbook.svg';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
+  sheet.querySelector('#scrapClose').onclick = closeMainOverlay; sheet.querySelector('#scrapSave').onclick = () => { localStorage.setItem('advent-v4-scrapbook', JSON.stringify({title:title.value.slice(0,200), text:text.value.slice(0,6000),paper:paper.value,wax:wax.value,tape:tape.value, stickers:snapshot()})); toast('手账草稿已保存'); closeMainOverlay(); };
+  sheet.querySelector('#scrapPublish').onclick=()=>{const day=parseInt(sheet.querySelector('#scrapDay').value,10);if(!day||day<1||day>25)return toast('日期要在 1—25 之间');const layout={title:title.value.slice(0,200),text:text.value.slice(0,6000),paper:paper.value,wax:wax.value,tape:tape.value,stickers:snapshot()};try{Backend.hide(day,[{type:'scrapbook',layout}], 'dessin');localStorage.removeItem('advent-v4-scrapbook');board=Backend.getBoard();refresh();toast(`手账已封进12月${day}日`);closeMainOverlay();}catch(e){toast(e.message);}};
+  overlay.onclick = e => { if (e.target === overlay) closeMainOverlay(); };
 }
 
 function legacyEntryItems(entry) {
@@ -541,7 +738,7 @@ function isAllowedRemoteAsset(url) {
 }
 
 function renderHalf(container, gift, label) {
-  if (!gift) return;
+  if (!gift) return null;
   const half = document.createElement('div');
   half.className = 'adv-half';
   const lbl = document.createElement('div');
@@ -552,7 +749,9 @@ function renderHalf(container, gift, label) {
   for (const item of gift.items_v2 || gift.items || []) {
     renderItem(half, item, gift.day, 'human', gift.answer, gift.id || '');
   }
+  appendMemoryActions(half, gift.id || `local-${gift.day}`, gift.day);
   container.appendChild(half);
+  return half;
 }
 
 /* ── 编辑器（三三追加礼物） ─────────────────────────────────────── */
@@ -685,6 +884,8 @@ async function openEditor(defaultDay) {
   frame.appendChild(imgPreviewWrap);
 
   let uploadedImageUrl = null;
+  const photoOptions=document.createElement('div');photoOptions.className='adv-photo-editor-options';photoOptions.innerHTML='<label><input type="checkbox" id="asPhoto"> 作为可翻转照片</label><select id="photoFrame"><option value="polaroid">拍立得</option><option value="vintage">复古冲印</option><option value="plain">普通照片</option><option value="postcard">明信片</option><option value="stamp">邮票边框</option></select><label>横向焦点 <input id="photoX" type="range" min="0" max="100" value="50"></label><label>纵向焦点 <input id="photoY" type="range" min="0" max="100" value="50"></label><textarea id="photoBack" class="adv-ta" placeholder="照片背面的故事、日期或签名"></textarea>';
+  frame.appendChild(photoOptions);
   imgIn.onchange = async () => {
     const file = imgIn.files?.[0];
     if (!file) return;
@@ -811,7 +1012,11 @@ async function openEditor(defaultDay) {
       else return { error: '音乐链接格式不认识' };
     }
 
-    if (uploadedImageUrl) items.push({ type: 'image', url: uploadedImageUrl });
+    if (uploadedImageUrl) {
+      const asPhoto=photoOptions.querySelector('#asPhoto').checked;
+      if(asPhoto)items.push({type:'photo',photo:{front:{url:uploadedImageUrl,frame:photoOptions.querySelector('#photoFrame').value,positionX:+photoOptions.querySelector('#photoX').value,positionY:+photoOptions.querySelector('#photoY').value,fit:'cover',title:''},back:{text:photoOptions.querySelector('#photoBack').value,date:'',signature:''}}});
+      else items.push({ type: 'image', url: uploadedImageUrl });
+    }
     if (recUploadUrl) items.push({ type: 'voice', url: recUploadUrl });
     if (uploadedAttachment) items.push(uploadedAttachment);
     return { items };
@@ -864,6 +1069,13 @@ async function openEditor(defaultDay) {
 
   sheet.appendChild(frame);
   overlay.appendChild(sheet);
+  // 草稿只存在本地，按身份/日期隔离；不会进入 Backend.hide 或 GitHub 同步。
+  const draftKey = `advent-v4-draft:${Backend.getWho()}:${dayIn.value || 'new'}`;
+  const draftFields = [...sheet.querySelectorAll('input:not([type=file]), textarea')];
+  try { const draft = JSON.parse(localStorage.getItem(draftKey) || 'null'); if (draft?.values) draftFields.forEach((el, i) => { if (draft.values[i] !== undefined) el.value = draft.values[i]; }); } catch { /* ignore malformed local draft */ }
+  const persistDraft = () => { try { localStorage.setItem(draftKey, JSON.stringify({ version:1, saved_at:Date.now(), values:draftFields.map(el => el.value) })); } catch { /* storage full */ } };
+  draftFields.forEach(el => el.addEventListener('input', persistDraft));
+  saveBtn.addEventListener('click', () => { try { localStorage.removeItem(draftKey); } catch {} }, { once:true });
   overlay.onclick = e => { if (e.target === overlay) closeOverlay(); };
 
   function closeOverlay() {
@@ -1073,6 +1285,18 @@ window.Backend = Backend; // 供测试与排查使用（不含任何敏感信息
 document.addEventListener('DOMContentLoaded', async () => {
   mountStage();
   Backend.init();
+  const deskWrite = document.getElementById('deskWrite');
+  const deskDiary = document.getElementById('deskDiary');
+  const deskMail = document.getElementById('deskMail');
+  const deskPhoto = document.getElementById('deskPhoto');
+  const deskNote = document.getElementById('deskNote');
+  const deskRecord = document.getElementById('deskRecord');
+  if (deskWrite) deskWrite.onclick = () => UI.openEditor();
+  if (deskDiary) deskDiary.onclick = () => openScrapbook();
+  if (deskMail) deskMail.onclick = () => openPostOffice();
+  if (deskPhoto) deskPhoto.onclick = () => openPhotoFrame();
+  if (deskNote) deskNote.onclick = () => openTodayNote();
+  if (deskRecord) deskRecord.onclick = () => openRecordPlayer();
   refreshWhoBtn();
   const whoBtn = document.getElementById('whoBtn');
   if (whoBtn) {

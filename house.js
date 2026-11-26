@@ -183,7 +183,20 @@ export function mountHouse(stage, opts) {
       }));
     } catch { /* ignore */ }
   }
-  const anim = (e, cls) => { e.classList.remove(cls); void e.offsetWidth; e.classList.add(cls); later(() => e.classList.remove(cls), 1700); };
+  // 旧实现用 remove/重排/add，连续点击时会把挂件瞬间弹回静止帧。
+  // 保留 CSS 待机动画，但对点击反馈使用 WAAPI，取消旧反馈时保留当前 computed transform。
+  const clickAnimations = new WeakMap();
+  const anim = (e, cls) => {
+    clickAnimations.get(e)?.cancel();
+    const hang = e.querySelector('.adv-hang');
+    if (!hang) return;
+    const keyframes = cls === 'drop'
+      ? [{ transform: 'translateY(0) rotate(9deg)' }, { transform: 'translateY(34px) rotate(24deg)', offset: .45 }, { transform: 'translateY(26px) rotate(2deg)', offset: .6 }, { transform: 'translateY(0) rotate(9deg)' }]
+      : [{ transform: 'rotate(-16deg)' }, { transform: 'rotate(4deg)', offset: .15 }, { transform: 'rotate(-28deg)', offset: .35 }, { transform: 'rotate(-9deg)', offset: .55 }, { transform: 'rotate(-19deg)', offset: .75 }, { transform: 'rotate(-16deg)' }];
+    const a = hang.animate(keyframes, { duration: cls === 'drop' ? 1600 : 1300, easing: 'ease-out' });
+    clickAnimations.set(e, a);
+    a.onfinish = () => { if (clickAnimations.get(e) === a) clickAnimations.delete(e); };
+  };
   bells.onclick = () => { anim(bells, "swing"); ding(); };
   pine.onclick = () => anim(pine, "drop");
 

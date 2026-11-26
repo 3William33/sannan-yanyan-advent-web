@@ -175,6 +175,7 @@ const DEFAULT_SAVE = {
   yanyan_freeze: null,
   scores: {},
   earned_stars: 0,
+  companion: { notes: {}, frames: {}, favorites: {} },
   settings: { name: '三三', companion: '砚砚', music: true, who: 'san', display: 'auto', smooth: false },
 };
 
@@ -189,7 +190,7 @@ function loadSave() {
     if (!raw || typeof raw !== 'object') return structuredClone(DEFAULT_SAVE);
     const merged = structuredClone(DEFAULT_SAVE);
     for (const [k, v] of Object.entries(raw)) {
-      if (k === 'peek_counts' || k === 'settings') Object.assign(merged[k], v || {});
+      if (k === 'peek_counts' || k === 'settings' || k === 'companion') Object.assign(merged[k], v || {});
       else merged[k] = v;
     }
     for (const [day, gift] of Object.entries(merged.human_gifts)) {
@@ -223,8 +224,9 @@ loadRemoteCache();
 
 /* ── 礼物条目规范化（与 Python clean_item / normalize_* 一致）──────── */
 
-const ITEM_TYPES = new Set(['text', 'question', 'song', 'abc', 'image', 'voice', 'audio', 'attachment']);
+const ITEM_TYPES = new Set(['text', 'question', 'song', 'abc', 'image', 'photo', 'comic', 'scrapbook', 'voice', 'audio', 'attachment']);
 const TEXT_FIELDS = { text: 6000, abc: 12000, name: 200, artist: 200, provider: 40, mime: 100, filename: 240 };
+const clamp = (n, min, max, fallback = min) => { n = Number(n); return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback; };
 
 function isSafeLocalUploadUrl(url) {
   if (!url.startsWith('uploads/') && !url.startsWith('/uploads/')) return false;
@@ -256,10 +258,31 @@ export function isAllowedAssetUrl(url) {
   return isSafeLocalUploadUrl(url) || isAllowedRemoteAsset(url);
 }
 
+function cleanPhotoData(value, { allowLocal = true } = {}) {
+  if (!value || typeof value !== 'object') return null;
+  const safeUrl = raw => { const u=String(raw||'').slice(0,1000); return (isAllowedRemoteAsset(u)||(allowLocal&&isSafeLocalUploadUrl(u)))?u:''; };
+  const front=value.front&&typeof value.front==='object'?value.front:value; const back=value.back&&typeof value.back==='object'?value.back:{};
+  const url=safeUrl(front.url||value.url); if(!url)return null;
+  return {front:{url,frame:['polaroid','vintage','plain','postcard','stamp'].includes(front.frame)?front.frame:'polaroid',title:String(front.title||'').slice(0,200),date:String(front.date||'').slice(0,40),fit:front.fit==='contain'?'contain':'cover',positionX:clamp(front.positionX,0,100,50),positionY:clamp(front.positionY,0,100,50)},back:{text:String(back.text||'').slice(0,3000),date:String(back.date||'').slice(0,40),signature:String(back.signature||'').slice(0,120)}};
+}
+function cleanComicData(value, { allowLocal = true } = {}) {
+  if(!value||typeof value!=='object')return null;const modes=new Set(['single','pages','scroll','spread','strip']);const pages=[];
+  for(const p of (Array.isArray(value.pages)?value.pages:[]).slice(0,80)){const u=String(p?.url||'').slice(0,1000);if(isAllowedRemoteAsset(u)||(allowLocal&&isSafeLocalUploadUrl(u)))pages.push({url:u,alt:String(p.alt||'').slice(0,300)});}
+  return pages.length?{mode:modes.has(value.mode)?value.mode:'pages',title:String(value.title||'').slice(0,200),pages}:null;
+}
+function cleanScrapbookLayout(value, { allowLocal = true } = {}) {
+  if(!value||typeof value!=='object')return null;const stickers=[];
+  for(const s of (Array.isArray(value.stickers)?value.stickers:[]).slice(0,100)){const out={char:String(s.char||'').slice(0,8),x:clamp(s.x,0,100,50),y:clamp(s.y,0,100,50),scale:clamp(s.scale,.2,4,1),rotate:clamp(s.rotate,-360,360,0),opacity:clamp(s.opacity,.1,1,1),z:Math.round(clamp(s.z,0,100,1))};const src=String(s.src||'').slice(0,1000);if(src&&(isAllowedRemoteAsset(src)||(allowLocal&&isSafeLocalUploadUrl(src))))out.src=src;if(out.char||out.src)stickers.push(out);}
+  return {title:String(value.title||'').slice(0,200),text:String(value.text||'').slice(0,6000),paper:['cream','kraft','grid','snow','botanical','blank'].includes(value.paper)?value.paper:'cream',wax:String(value.wax||'wine').slice(0,30),tape:String(value.tape||'paper').slice(0,30),stickers};
+}
+
 function cleanItem(item, { allowLocal = true } = {}) {
   if (!item || typeof item !== 'object' || !ITEM_TYPES.has(item.type)) return null;
   const kind = item.type;
   const out = { type: kind };
+  if (kind === 'photo') out.photo = cleanPhotoData(item.photo||item, {allowLocal});
+  if (kind === 'comic') out.comic = cleanComicData(item.comic||item, {allowLocal});
+  if (kind === 'scrapbook') out.layout = cleanScrapbookLayout(item.layout, {allowLocal});
   for (const [field, limit] of Object.entries(TEXT_FIELDS)) {
     if (item[field] !== undefined && item[field] !== null) out[field] = String(item[field]).slice(0, limit);
   }
@@ -269,7 +292,7 @@ function cleanItem(item, { allowLocal = true } = {}) {
     if (allowLocal && isSafeLocalUploadUrl(url)) { /* 本地暂存资源 */ out.__local = true; }
     if (valid || (allowLocal && isSafeLocalUploadUrl(url))) out.url = url;
   }
-  if (out.text || out.abc || out.url) return out;
+  if (out.text || out.abc || out.url || out.photo || out.comic || out.layout) return out;
   return null;
 }
 
@@ -297,7 +320,7 @@ function normalizeEntry(entry, fallbackId, { allowLocal = true } = {}) {
   const items = entryItems(entry, { allowLocal });
   if (!items.length) return null;
   const created = String(entry.created_at || entry.at || '').slice(0, 80);
-  return {
+  const out = {
     id: String(entry.id || fallbackId).slice(0, 160),
     from: String(entry.from || '').slice(0, 80),
     title: String(entry.title || '').slice(0, 300),
@@ -307,6 +330,11 @@ function normalizeEntry(entry, fallbackId, { allowLocal = true } = {}) {
     created_at: created,
     at: created,
   };
+  // V4 可选字段：只做浅层安全保留，旧协议字段和未知字段不被覆盖。
+  for (const key of ['paper', 'stickers', 'photo', 'comic', 'reply_to', 'favorite', 'editor_version']) {
+    if (entry[key] !== undefined) out[key] = entry[key];
+  }
+  return out;
 }
 
 function normalizeDays(value, { allowLocal = false } = {}) {
@@ -576,6 +604,10 @@ function syncAll() {
       ok++;
     } catch (e) { fail('peek_log', e); }
 
+    try {
+      const wrapper=await fetchRemoteFile('companion_state.json');const remote=decodeRaw(wrapper.payload,SAN_DIGEST);mergeCompanionState(remote);sources.companion_state={state:'succeeded'};ok++;
+    } catch(e){fail('companion_state',e);}
+
     // 统计：成功 / 预期为空 / 缓存回退 / 真正失败
     const entries = Object.values(sources);
     const failed = entries.filter(s => s.state === 'failed' || s.state === 'offline_cache');
@@ -834,6 +866,17 @@ function hide(day, items, icon) {
   return { ok: true, id };
 }
 
+function reply(day, giftId, text) {
+  const clean = String(text || '').trim().slice(0, 4000);
+  const d = parseInt(day, 10);
+  if (!Number.isInteger(d) || d < 1 || d > 25 || !clean) throw new Error('回信内容不能为空');
+  const created = shanghaiNowIso();
+  const id = `reply-${(crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`).replace(/-/g, '')}`;
+  (save.human_gifts[String(d)] ||= []).push({ id, created_at:created, at:created, title:'写给这份礼物的回信', kind:'letter', reply_to:String(giftId||'').slice(0,160), text:clean, items_v2:[{type:'text',text:clean}], published:false });
+  persist();
+  return { ok:true, id };
+}
+
 /* ── 上传暂存（IndexedDB；发布时转存到仓库）──────────────────────── */
 
 const IDB_NAME = 'advent-uploads';
@@ -1017,6 +1060,9 @@ async function publishAll(onProgress) {
           if (['image', 'voice', 'audio', 'attachment'].includes(item.type) && item.url) {
             item.url = await publishLocalAsset(token, item.url);
           }
+          if (item.type === 'photo' && item.photo?.front?.url) item.photo.front.url = await publishLocalAsset(token, item.photo.front.url);
+          if (item.type === 'comic' && Array.isArray(item.comic?.pages)) for (const page of item.comic.pages) page.url = await publishLocalAsset(token, page.url);
+          if (item.type === 'scrapbook' && Array.isArray(item.layout?.stickers)) for (const sticker of item.layout.stickers) if (sticker.src) sticker.src = await publishLocalAsset(token, sticker.src);
         }
       }
     }
@@ -1078,6 +1124,16 @@ async function publishAll(onProgress) {
         if ((e.status !== 409 && e.status !== 422) || attempt === 3) throw e;
         await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
       }
+    }
+
+    /* 4. 同步书桌状态（便签/相框/收藏），独立于正式礼物与解锁规则 */
+    progress('正在同步圣诞书桌…');
+    for(const frame of Object.values(save.companion.frames||{}))if(frame?.src)frame.src=await publishLocalAsset(token,frame.src);
+    for(let attempt=0;attempt<4;attempt++){
+      const {content,sha}=await ghGetFile(token,'companion_state.json');let remote={notes:{},frames:{},favorites:{}};
+      if(content){try{const wrapper=JSON.parse(new TextDecoder().decode(content));remote=decodeRaw(wrapper.payload,SAN_DIGEST);}catch{/* 首次或损坏时以本地安全结构重建 */}}
+      mergeCompanionState(remote);const wrapper={version:1,updated_at:shanghaiNowIso(),protocol:'advent-companion-v1',payload:encodePayload(save.companion,SAN_DIGEST)};
+      try{await ghPutFile(token,'companion_state.json',new TextEncoder().encode(JSON.stringify(wrapper,null,2)),`Update companion state (${commitStamp()})`,sha);break;}catch(e){if((e.status!==409&&e.status!==422)||attempt===3)throw e;await new Promise(r=>setTimeout(r,300*(attempt+1)));}
     }
 
     /* 4. 合并偷看记录（读取远端 → 合并双方历史 → 写回） */
@@ -1143,6 +1199,11 @@ function setWho(who) {
   return getWho();
 }
 
+function cleanCompanionValue(group,value){if(!value||typeof value!=='object')return null;if(group==='notes')return{text:String(value.text||'').slice(0,280),who:value.who==='yan'?'yan':'san',updated_at:String(value.updated_at||'').slice(0,80)};if(group==='favorites')return{id:String(value.id||'').slice(0,160),day:clamp(value.day,1,25,1),updated_at:String(value.updated_at||'').slice(0,80)};if(group==='frames'){const src=String(value.src||'').slice(0,1000);return{src:(isAllowedRemoteAsset(src)||isSafeLocalUploadUrl(src))?src:'',note:String(value.note||'').slice(0,1000),updated_at:String(value.updated_at||'').slice(0,80)};}return null;}
+function mergeCompanionState(remote){for(const group of ['notes','frames','favorites']){save.companion[group]||={};for(const [key,value] of Object.entries(remote?.[group]||{}).slice(0,500)){const clean=cleanCompanionValue(group,value);if(!clean)continue;const local=save.companion[group][key];if(!local||String(clean.updated_at||'')>String(local?.updated_at||''))save.companion[group][String(key).slice(0,200)]=clean;}}persist();return save.companion;}
+function getCompanion(){return structuredClone(save.companion);}
+function setCompanion(group,key,value){if(!['notes','frames','favorites'].includes(group))throw new Error('invalid companion group');save.companion[group]||={};if(value===null)delete save.companion[group][String(key)];else{const clean=cleanCompanionValue(group,{...value,updated_at:shanghaiNowIso()});if(!clean)throw new Error('invalid companion value');save.companion[group][String(key).slice(0,200)]=clean;}persist();return getCompanion();}
+
 /* ── 导出接口（app.js 调用）───────────────────────────────────────── */
 
 export const Backend = {
@@ -1152,6 +1213,7 @@ export const Backend = {
   touch,
   seen,
   answer,
+  reply,
   hide,
   uploadFile,
   resolveMediaUrl,
@@ -1162,6 +1224,8 @@ export const Backend = {
   hasPat,
   getWho,
   setWho,
+  getCompanion,
+  setCompanion,
   getDisplay,
   setDisplay,
   getSmooth,
