@@ -1285,8 +1285,9 @@ body.dusk .adv-stklib-fav, .adv-page.dusk .adv-stklib-fav { background: rgba(59,
 
 /* iPad 横屏 / 桌面：手账编辑器改双栏，贴纸收纳册在侧边，不遮挡编辑区 */
 .adv-scrap-body { display: flex; flex-direction: column; }
-.adv-scrap-side { order: 2; }
-.adv-scrap-stage { order: 1; }
+/* 竖屏：贴纸收纳册紧跟表单（便于发现），画布在下；横屏由下面的 grid-template-areas 重排 */
+.adv-scrap-side { order: 1; }
+.adv-scrap-stage { order: 2; }
 @media (min-width: 820px) and (orientation: landscape) {
   /* 手账素材库浮层较宽，必须占满视口；否则沿用 v4 书桌的 left:55% 会把右侧贴纸面板挤出屏幕 */
   .adv-zoom:has(.adv-stklib-host) { left: 0; right: 0; width: auto; padding: 14px; justify-content: center; }
