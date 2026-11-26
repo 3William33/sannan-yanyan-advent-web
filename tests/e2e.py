@@ -11,8 +11,8 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright, expect
 
-ROOT = Path('/root/work')
-SITE = 'http://localhost:8024/sannan-yanyan-advent-web/'
+ROOT = Path(__file__).resolve().parents[1]
+SITE = os.environ.get('ADVENT_SITE', 'http://localhost:8024/')
 MOCK = 'http://localhost:8025/data'
 MOCK_GH = 'http://localhost:8026'
 SAVE_KEY = 'advent-web-save-v1'
@@ -57,12 +57,12 @@ def goto_page(page, clock_dt, extra=''):
 
 
 def main():
-    subprocess.run([sys.executable, str(ROOT / 'webrepo/tests/mock_data.py'), '/tmp/mockdata'], check=True)
+    subprocess.run([sys.executable, str(ROOT / 'tests/mock_data.py'), '/tmp/mockdata'], check=True)
     subprocess.run(['rm', '-rf', '/tmp/mockgh'], check=True)
 
-    data_srv = subprocess.Popen([sys.executable, str(ROOT / 'webrepo/tests/mock_server.py'), '/tmp/mockdata', '/tmp/mockgh'],
+    data_srv = subprocess.Popen([sys.executable, str(ROOT / 'tests/mock_server.py'), '/tmp/mockdata', '/tmp/mockgh'],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    gh_srv = subprocess.Popen([sys.executable, str(ROOT / 'webrepo/tests/mock_server.py'), '/tmp/mockdata', '/tmp/mockgh'],
+    gh_srv = subprocess.Popen([sys.executable, str(ROOT / 'tests/mock_server.py'), '/tmp/mockdata', '/tmp/mockgh'],
                               env={**os.environ, 'MOCK_GH': '1'}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
 

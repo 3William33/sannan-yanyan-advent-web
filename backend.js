@@ -841,6 +841,17 @@ function hide(day, items, icon) {
   return { ok: true, id };
 }
 
+function reply(day, giftId, text) {
+  const clean = String(text || '').trim().slice(0, 4000);
+  const d = parseInt(day, 10);
+  if (!Number.isInteger(d) || d < 1 || d > 25 || !clean) throw new Error('回信内容不能为空');
+  const created = shanghaiNowIso();
+  const id = `reply-${(crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`).replace(/-/g, '')}`;
+  (save.human_gifts[String(d)] ||= []).push({ id, created_at:created, at:created, title:'写给这份礼物的回信', kind:'letter', reply_to:String(giftId||'').slice(0,160), text:clean, items_v2:[{type:'text',text:clean}], published:false });
+  persist();
+  return { ok:true, id };
+}
+
 /* ── 上传暂存（IndexedDB；发布时转存到仓库）──────────────────────── */
 
 const IDB_NAME = 'advent-uploads';
@@ -1159,6 +1170,7 @@ export const Backend = {
   touch,
   seen,
   answer,
+  reply,
   hide,
   uploadFile,
   resolveMediaUrl,

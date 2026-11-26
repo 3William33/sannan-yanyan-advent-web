@@ -36,6 +36,14 @@ function toast(msg, ms = 3000) {
 let board = null;
 let houseCtrl = null;
 
+function closeMainOverlay() {
+  const overlay = document.getElementById('overlay');
+  if (!overlay) return;
+  overlay.classList.remove('on');
+  overlay.style.display = 'none';
+  overlay.innerHTML = '';
+}
+
 /* ── 房子挂载 ────────────────────────────────────────────────────── */
 function mountStage() {
   const stage = document.getElementById('stage');
@@ -264,42 +272,59 @@ function showGiftCard(day, gifts, remoteExtras, sannanExtras, rect, doneFn, over
   /* 礼物内容区 */
   const body = document.createElement('div');
   body.className = 'adv-body';
+  const giftSections = [];
 
   /* 渲染砚砚的礼物 */
   const yanGift = gifts?.ai;
   if (yanGift) {
+    const yanSection = document.createElement('section');
+    yanSection.className = 'adv-envelope-content';
     const pic = document.createElement('div');
     pic.className = 'adv-pic';
     const iconKey = kindToIcon(yanGift.kind || yanGift.icon);
     pic.innerHTML = iconSvg(iconKey);
-    frame.appendChild(pic); // body 稍后才 append，这里直接追加即可保持顺序
+    yanSection.appendChild(pic);
 
     for (const item of yanGift.items || []) {
-      renderItem(body, item, day, 'ai', yanGift.answer, yanGift.id || `builtin-yan-${day}`);
+      renderItem(yanSection, item, day, 'ai', yanGift.answer, yanGift.id || `builtin-yan-${day}`);
     }
 
     if (yanGift.note) {
       const note = document.createElement('div');
       note.className = 'adv-note';
       note.textContent = yanGift.note;
-      frame.appendChild(note);
+      yanSection.appendChild(note);
     }
+    appendMemoryActions(yanSection, yanGift.id || `builtin-yan-${day}`, day);
+    body.appendChild(yanSection);
+    giftSections.push({ el: yanSection, title: yanGift.title || '砚砚的礼物', fresh: false });
   }
 
   /* 砚砚的远程追加 */
   for (const entry of remoteExtras) {
-    renderRemoteEntry(body, entry, '砚砚后来追加', day);
+    const el = renderRemoteEntry(body, entry, '砚砚后来追加', day);
+    if (el) giftSections.push({ el, title: entry.title || '追加礼物', fresh: true });
   }
 
   /* 三三本地礼物 */
   const sanEntries = gifts?.human_entries || (gifts?.human ? [gifts.human] : []);
   for (const sanGift of sanEntries) {
-    renderHalf(body, sanGift, '三三放进来的');
+    const el = renderHalf(body, sanGift, '三三放进来的');
+    if (el) giftSections.push({ el, title: sanGift.title || '三三的礼物', fresh: false });
   }
 
   /* 三三的远程礼物 */
   for (const entry of sannanExtras) {
-    renderRemoteEntry(body, entry, '三三放进来的', day);
+    const el = renderRemoteEntry(body, entry, '三三放进来的', day);
+    if (el) giftSections.push({ el, title: entry.title || '三三追加', fresh: true });
+  }
+
+  if (giftSections.length > 1) {
+    const folder = document.createElement('div'); folder.className = 'adv-accordion-folder';
+    const tabs = document.createElement('div'); tabs.className = 'adv-accordion-tabs';
+    const select = i => giftSections.forEach((s,j)=>{s.el.classList.toggle('pulled',i===j); s.el.hidden=i!==j; tabs.children[j]?.classList.toggle('on',i===j);});
+    giftSections.forEach((s,i)=>{const b=document.createElement('button');b.type='button';b.className='adv-accordion-tab';b.title=s.title;b.textContent=(s.fresh?'★ ':'')+(s.title.length>12?s.title.slice(0,12)+'…':s.title);b.onclick=()=>select(i);tabs.appendChild(b);});
+    folder.appendChild(tabs); body.prepend(folder); select(0);
   }
 
   frame.appendChild(body);
@@ -523,6 +548,7 @@ function renderItem(container, item, day, role, existingAnswer, giftId = '') {
 }
 
 function renderPhoto(container, photo, title) {
+  const holder = document.createElement('div'); holder.className = 'adv-photo-holder';
   const wrap = document.createElement('button');
   wrap.type = 'button'; wrap.className = 'adv-photo3d'; wrap.setAttribute('aria-label', '翻转照片');
   const front = document.createElement('span'); front.className = 'adv-photo-face adv-photo-front';
@@ -532,7 +558,11 @@ function renderPhoto(container, photo, title) {
   if (url) Backend.resolveMediaUrl(url).then(src => { if (src) img.src = src; });
   front.append(img, Object.assign(document.createElement('small'), { textContent: photo?.front?.title || title }));
   back.textContent = photo?.back?.text || '背面还没有留言';
-  wrap.append(front, back); wrap.onclick = () => wrap.classList.toggle('flipped'); container.appendChild(wrap);
+  wrap.append(front, back); wrap.onclick = () => wrap.classList.toggle('flipped'); holder.appendChild(wrap);
+  const controls=document.createElement('div');controls.className='adv-photo-export';
+  const frontBtn=document.createElement('button');frontBtn.className='adv-btn';frontBtn.textContent='导出正面';frontBtn.onclick=async()=>{const src=await Backend.resolveMediaUrl(url);if(src){const a=document.createElement('a');a.href=src;a.target='_blank';a.rel='noopener';a.download='photo-front';a.click();}};
+  const backBtn=document.createElement('button');backBtn.className='adv-btn';backBtn.textContent='导出背面';backBtn.onclick=()=>{const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900"><rect width="100%" height="100%" fill="#f8efd9"/><rect x="45" y="45" width="1110" height="810" fill="none" stroke="#9a6b35" stroke-width="3"/><text x="90" y="130" font-size="38" fill="#6b4423">${esc(photo?.back?.date||'')}</text><foreignObject x="90" y="180" width="1020" height="570"><div xmlns="http://www.w3.org/1999/xhtml" style="font:34px serif;color:#6b4423;white-space:pre-wrap;line-height:1.8">${esc(photo?.back?.text||'背面还没有留言')}</div></foreignObject><text x="900" y="800" font-size="38" fill="#6b4423">${esc(photo?.back?.signature||'')}</text></svg>`;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'}));a.download='photo-back.svg';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
+  controls.append(frontBtn,backBtn);holder.appendChild(controls);container.appendChild(holder);
 }
 
 function renderComic(container, comic, title) {
@@ -560,12 +590,12 @@ function appendMediaCaption(container, item) {
 }
 
 function renderRemoteEntry(container, entry, label, day) {
-  if (!entry) return;
+  if (!entry) return null;
   const source = Array.isArray(entry.items_v2) && entry.items_v2.length
     ? entry.items_v2
     : (Array.isArray(entry.items) && entry.items.length ? entry.items : legacyEntryItems(entry));
   const items = source.filter(item => item && ['text', 'question', 'song', 'abc', 'image', 'photo', 'comic', 'voice', 'audio', 'attachment'].includes(item.type));
-  if (!items.length) return;
+  if (!items.length) return null;
   const half = document.createElement('div');
   half.className = 'adv-half';
   const lbl = document.createElement('div');
@@ -576,22 +606,23 @@ function renderRemoteEntry(container, entry, label, day) {
   for (const item of items) {
     renderItem(half, item, day, entry.from || 'remote', entry.answer || '', entry.id || '');
   }
-  appendMemoryActions(half, entry.id || `${day}-${label}`);
+  appendMemoryActions(half, entry.id || `${day}-${label}`, day);
   container.appendChild(half);
+  return half;
 }
 
-function appendMemoryActions(container, id) {
+function appendMemoryActions(container, id, day) {
   const key = `advent-v4-favorite:${id}`;
   const row = document.createElement('div'); row.className = 'adv-memory-actions';
   const fav = document.createElement('button'); fav.className = 'adv-btn';
   const sync = () => { fav.textContent = localStorage.getItem(key) === '1' ? '★ 已收藏' : '☆ 收藏'; };
   fav.onclick = () => { localStorage.getItem(key) === '1' ? localStorage.removeItem(key) : localStorage.setItem(key, '1'); sync(); };
   const reply = document.createElement('button'); reply.className = 'adv-btn'; reply.textContent = '↩ 写回信';
-  reply.onclick = () => openReplyComposer(id);
+  reply.onclick = () => openReplyComposer(id, day);
   row.append(fav, reply); sync(); container.appendChild(row);
 }
 
-function openReplyComposer(id) {
+function openReplyComposer(id, day) {
   const overlay = document.getElementById('overlay'); overlay.innerHTML = ''; overlay.style.display = 'flex'; overlay.classList.add('on');
   const sheet = document.createElement('div'); sheet.className = 'adv-sheet adv-paper';
   sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">写一封回信</span><span class="by">reply</span></div><p class="adv-editor-intro">这封回信只关联原礼物，不会改写对方的内容。</p></div>';
@@ -599,21 +630,30 @@ function openReplyComposer(id) {
   const saved = localStorage.getItem(`advent-v4-reply:${id}`); if (saved) ta.value = saved;
   const row = document.createElement('div'); row.className = 'adv-row'; const close = document.createElement('button'); close.className = 'adv-btn'; close.textContent = '关上';
   const save = document.createElement('button'); save.className = 'adv-btn solid'; save.textContent = '保存回信';
-  close.onclick = closeOverlay; save.onclick = () => { localStorage.setItem(`advent-v4-reply:${id}`, ta.value.slice(0,4000)); toast('回信已保存在这封礼物旁'); closeOverlay(); };
-  frame.append(ta, row); row.append(close, save); overlay.appendChild(sheet); overlay.onclick = e => { if (e.target === overlay) closeOverlay(); };
+  close.onclick = closeMainOverlay; save.onclick = () => { try { Backend.reply(day, id, ta.value); localStorage.removeItem(`advent-v4-reply:${id}`); board=Backend.getBoard(); refresh(); toast('回信已封好，可随下一次发布同步'); closeMainOverlay(); } catch(e) { toast(e.message); } };
+  frame.append(ta, row); row.append(close, save); overlay.appendChild(sheet); overlay.onclick = e => { if (e.target === overlay) closeMainOverlay(); };
 }
 
 function openScrapbook() {
   const overlay = document.getElementById('overlay'); overlay.innerHTML = ''; overlay.style.display = 'flex'; overlay.classList.add('on');
   const sheet = document.createElement('div'); sheet.className = 'adv-sheet adv-paper';
-  sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">手账抽屉</span><span class="by">scrapbook</span></div><p class="adv-editor-intro">拖动贴纸，留下今天的页面。草稿只保存在当前浏览器。</p><label class="adv-lab">信纸标题</label><input class="adv-in1" id="scrapTitle" placeholder="十二月的某一天"><label class="adv-lab">正文</label><textarea class="adv-ta" id="scrapText" placeholder="写一点冬天的事…"></textarea><div class="adv-sticker-tray"><button type="button" data-sticker="★">★</button><button type="button" data-sticker="❄">❄</button><button type="button" data-sticker="♡">♡</button><button type="button" data-sticker="🍪">🍪</button></div><div class="adv-scrap-canvas" id="scrapCanvas"></div><div class="adv-row"><button class="adv-btn" id="scrapClose">关上</button><button class="adv-btn solid" id="scrapSave">保存手账</button></div></div>';
+  sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">手账抽屉</span><span class="by">scrapbook</span></div><p class="adv-editor-intro">拖动贴纸，留下今天的页面。草稿只保存在当前浏览器。</p><label class="adv-lab">信纸标题</label><input class="adv-in1" id="scrapTitle" placeholder="十二月的某一天"><label class="adv-lab">正文</label><textarea class="adv-ta" id="scrapText" placeholder="写一点冬天的事…"></textarea><div class="adv-sticker-tray"><button type="button" data-sticker="★">★</button><button type="button" data-sticker="❄">❄</button><button type="button" data-sticker="♡">♡</button><button type="button" data-sticker="🍪">🍪</button><label class="adv-sticker-upload">＋ PNG<input id="stickerUpload" type="file" accept="image/png,image/webp" hidden></label></div><div class="adv-sticker-tools"><button type="button" data-action="smaller">−</button><button type="button" data-action="larger">＋</button><button type="button" data-action="rotate">↻</button><button type="button" data-action="fade">◐</button><button type="button" data-action="back">↓</button><button type="button" data-action="front">↑</button><button type="button" data-action="copy">复制</button><button type="button" data-action="delete">删除</button><button type="button" data-action="undo">撤销</button><button type="button" data-action="redo">重做</button></div><div class="adv-scrap-canvas" id="scrapCanvas"></div><div class="adv-row"><button class="adv-btn" id="scrapExport">导出图片</button><button class="adv-btn" id="scrapClose">关上</button><button class="adv-btn solid" id="scrapSave">保存手账</button></div></div>';
   overlay.appendChild(sheet);
   const title = sheet.querySelector('#scrapTitle'), text = sheet.querySelector('#scrapText'), canvas = sheet.querySelector('#scrapCanvas');
-  try { const d = JSON.parse(localStorage.getItem('advent-v4-scrapbook') || 'null'); if (d) { title.value = d.title || ''; text.value = d.text || ''; (d.stickers || []).forEach(s => addSticker(s.char, s.x, s.y)); } } catch {}
-  function addSticker(char, x = 50, y = 50) { const b = document.createElement('button'); b.type = 'button'; b.className = 'adv-sticker'; b.textContent = char; b.style.left = x + '%'; b.style.top = y + '%'; b.onpointerdown = e => { b.setPointerCapture(e.pointerId); const move = ev => { const r = canvas.getBoundingClientRect(); b.style.left = Math.max(0, Math.min(100, (ev.clientX-r.left)/r.width*100))+'%'; b.style.top = Math.max(0, Math.min(100, (ev.clientY-r.top)/r.height*100))+'%'; }; b.onpointermove = move; b.onpointerup = () => b.onpointermove = null; }; canvas.appendChild(b); }
+  let selected = null, history = [], future = [];
+  const snapshot = () => [...canvas.children].map(b=>({char:b.dataset.char||'',src:b.dataset.src||'',x:parseFloat(b.style.left),y:parseFloat(b.style.top),scale:+(b.dataset.scale||1),rotate:+(b.dataset.rotate||0),opacity:+(b.dataset.opacity||1),z:+(b.style.zIndex||1)}));
+  const remember = () => { history.push(snapshot()); if (history.length > 40) history.shift(); future = []; };
+  const restore = list => { canvas.innerHTML=''; selected=null; (list||[]).forEach(addStickerFromData); };
+  try { const d = JSON.parse(localStorage.getItem('advent-v4-scrapbook') || 'null'); if (d) { title.value = d.title || ''; text.value = d.text || ''; restore(d.stickers || []); } } catch {}
+  function applySticker(b) { b.style.transform=`translate(-50%,-50%) scale(${b.dataset.scale||1}) rotate(${b.dataset.rotate||0}deg)`; b.style.opacity=b.dataset.opacity||1; }
+  function addStickerFromData(s) { addSticker(s.char||'',s.x??50,s.y??50,s); }
+  function addSticker(char, x = 50, y = 50, data={}) { const b = document.createElement('button'); b.type = 'button'; b.className = 'adv-sticker'; b.dataset.char=char; b.dataset.src=data.src||''; b.dataset.scale=data.scale||1; b.dataset.rotate=data.rotate||0; b.dataset.opacity=data.opacity??1; b.style.left=x+'%'; b.style.top=y+'%'; b.style.zIndex=data.z||1; if(data.src){const img=document.createElement('img');img.src=data.src;img.alt='自定义贴纸';b.appendChild(img);}else b.textContent=char; applySticker(b); b.onclick=()=>{selected?.classList.remove('selected');selected=b;b.classList.add('selected');}; b.onpointerdown = e => { remember(); b.onclick(); b.setPointerCapture(e.pointerId); const move = ev => { const r = canvas.getBoundingClientRect(); b.style.left = Math.max(0, Math.min(100, (ev.clientX-r.left)/r.width*100))+'%'; b.style.top = Math.max(0, Math.min(100, (ev.clientY-r.top)/r.height*100))+'%'; }; b.onpointermove = move; b.onpointerup = () => b.onpointermove = null; }; canvas.appendChild(b); }
   sheet.querySelectorAll('[data-sticker]').forEach(b => b.onclick = () => addSticker(b.dataset.sticker));
-  sheet.querySelector('#scrapClose').onclick = closeOverlay; sheet.querySelector('#scrapSave').onclick = () => { localStorage.setItem('advent-v4-scrapbook', JSON.stringify({title:title.value.slice(0,200), text:text.value.slice(0,6000), stickers:[...canvas.children].map(b=>({char:b.textContent,x:parseFloat(b.style.left),y:parseFloat(b.style.top)}))})); toast('手账草稿已保存'); closeOverlay(); };
-  overlay.onclick = e => { if (e.target === overlay) closeOverlay(); };
+  sheet.querySelector('#stickerUpload').onchange=e=>{const f=e.target.files?.[0];if(!f||f.size>2*1024*1024)return toast('贴纸需为 2MB 以内的 PNG/WebP');const rd=new FileReader();rd.onload=()=>{remember();addSticker('',50,50,{src:String(rd.result)});};rd.readAsDataURL(f);};
+  sheet.querySelector('.adv-sticker-tools').onclick=e=>{const a=e.target.dataset.action;if(!a)return;if(a==='undo'){if(!history.length)return;future.push(snapshot());restore(history.pop());return;}if(a==='redo'){if(!future.length)return;history.push(snapshot());restore(future.pop());return;}if(!selected)return toast('先点选一枚贴纸');remember();if(a==='delete'){selected.remove();selected=null;return;}if(a==='copy'){addStickerFromData({...snapshot().find((_,i)=>canvas.children[i]===selected),x:parseFloat(selected.style.left)+4,y:parseFloat(selected.style.top)+4});return;}if(a==='smaller')selected.dataset.scale=Math.max(.3,+selected.dataset.scale-.1);if(a==='larger')selected.dataset.scale=Math.min(3,+selected.dataset.scale+.1);if(a==='rotate')selected.dataset.rotate=(+selected.dataset.rotate+15)%360;if(a==='fade')selected.dataset.opacity=Math.max(.2,+selected.dataset.opacity-.2);if(a==='back')selected.style.zIndex=Math.max(0,+selected.style.zIndex-1);if(a==='front')selected.style.zIndex=+selected.style.zIndex+1;applySticker(selected);};
+  sheet.querySelector('#scrapExport').onclick=()=>{const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));const marks=snapshot().filter(s=>!s.src).map(s=>`<text x="${s.x*12}" y="${s.y*16}" font-size="${42*s.scale}" opacity="${s.opacity}" transform="rotate(${s.rotate} ${s.x*12} ${s.y*16})">${esc(s.char)}</text>`).join('');const lines=esc(text.value).split('\n').map((l,i)=>`<text x="100" y="${260+i*42}" font-size="25" fill="#3a2f28">${l}</text>`).join('');const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600"><rect width="100%" height="100%" fill="#f5ead2"/><rect x="55" y="55" width="1090" height="1490" fill="none" stroke="#9a6b35" stroke-width="3"/><text x="100" y="160" font-size="52" fill="#7d1f22">${esc(title.value||'冬日手账')}</text>${lines}${marks}</svg>`;const blob=new Blob([svg],{type:'image/svg+xml'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='christmas-scrapbook.svg';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
+  sheet.querySelector('#scrapClose').onclick = closeMainOverlay; sheet.querySelector('#scrapSave').onclick = () => { localStorage.setItem('advent-v4-scrapbook', JSON.stringify({title:title.value.slice(0,200), text:text.value.slice(0,6000), stickers:snapshot()})); toast('手账草稿已保存'); closeMainOverlay(); };
+  overlay.onclick = e => { if (e.target === overlay) closeMainOverlay(); };
 }
 
 function legacyEntryItems(entry) {
@@ -629,7 +669,7 @@ function isAllowedRemoteAsset(url) {
 }
 
 function renderHalf(container, gift, label) {
-  if (!gift) return;
+  if (!gift) return null;
   const half = document.createElement('div');
   half.className = 'adv-half';
   const lbl = document.createElement('div');
@@ -640,7 +680,9 @@ function renderHalf(container, gift, label) {
   for (const item of gift.items_v2 || gift.items || []) {
     renderItem(half, item, gift.day, 'human', gift.answer, gift.id || '');
   }
+  appendMemoryActions(half, gift.id || `local-${gift.day}`, gift.day);
   container.appendChild(half);
+  return half;
 }
 
 /* ── 编辑器（三三追加礼物） ─────────────────────────────────────── */
