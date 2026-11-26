@@ -1,3 +1,35 @@
 {
   "protocol": "advent-gifts-v3.2",
-  "days": {"7": [{"id":"comic-2026-07","kind":"comic","comic":{"mode":"pages","pages":[{"url":"https://raw.githubusercontent.com/3William33/sannan-yanyan-advent-2026/main/assets/comics/example.webp","alt":"测试绘本"}]},"items_v2":[{"type":"text","text":"一页冬天的小故事"}],"editor_version":1}]}
+  "days": {
+    "7": [
+      {
+        "id": "comic-2026-07",
+        "kind": "comic",
+        "items_v2": [
+          {"type": "text", "text": "一页冬天的小故事"},
+          {"type": "comic", "comic": {"mode": "spread", "pages": [
+            {"url": "https://raw.githubusercontent.com/3William33/sannan-yanyan-advent-2026/main/assets/comics/page-1.webp", "alt": "第一页"},
+            {"url": "https://raw.githubusercontent.com/3William33/sannan-yanyan-advent-2026/main/assets/comics/page-2.webp", "alt": "第二页"}
+          ]}}
+        ],
+        "editor_version": 1
+      },
+      {
+        "id": "photo-2026-07",
+        "kind": "photo",
+        "items_v2": [{"type": "photo", "photo": {
+          "front": {"url": "https://raw.githubusercontent.com/3William33/sannan-yanyan-advent-2026/main/assets/photos/example.webp", "frame": "polaroid", "fit": "cover", "positionX": 50, "positionY": 45},
+          "back": {"text": "照片背面的故事", "date": "2026-12-07", "signature": "三三"}
+        }}]
+      },
+      {
+        "id": "scrapbook-2026-07",
+        "kind": "scrapbook",
+        "items_v2": [{"type": "scrapbook", "layout": {
+          "title": "冬日手账", "text": "今天下雪了。", "paper": "grid", "wax": "wine", "tape": "paper",
+          "stickers": [{"char": "★", "x": 80, "y": 15, "scale": 1.1, "rotate": 12, "opacity": 1, "z": 2}]
+        }}]
+      }
+    ]
+  }
+}

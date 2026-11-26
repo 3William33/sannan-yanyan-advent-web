@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """针对性回归：旋转黑胶、对方视角预览、偷看提示。全部虚构数据，不剧透真实礼物。"""
+import os
 import sys
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
-SITE = 'http://localhost:8024/sannan-yanyan-advent-web/'
+SITE = os.environ.get('ADVENT_SITE', 'http://localhost:8024/')
 DATA = 'http://localhost:8025/data'
 SAVE_KEY = 'advent-web-save-v1'
 

@@ -60,6 +60,10 @@ def main(out_dir):
                    'events': [{'id': 'mock-peek-1', 'who': 'yan', 'day': 2,
                                'peeked_at': '2026-11-20T12:00:00+08:00',
                                'at': '2026-11-20T12:00:00+08:00', 'outcome': 'attempt'}]}, f)
+    with open(f'{out_dir}/companion_state.json', 'w') as f:
+        json.dump({'version': 1, 'updated_at': '2026-11-20T12:00:00+08:00',
+                   'protocol': 'advent-companion-v1',
+                   'payload': encode({'notes': {}, 'frames': {}, 'favorites': {}}, SAN_DIGEST)}, f)
     print('mock data written to', out_dir)
 
 

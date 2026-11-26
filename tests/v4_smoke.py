@@ -42,5 +42,23 @@ with sync_playwright() as p:
             if engine_name == 'chromium' and (width,height) in ((1440,900),(1024,768),(390,844)):
                 page.screenshot(path=str(OUT/f'v4-{width}x{height}.png'), full_page=True)
             context.close()
+        if engine_name == 'chromium':
+            context=browser.new_context(viewport={'width':1280,'height':800});page=context.new_page();page.clock.set_fixed_time('2026-12-07T10:00:00+08:00');page.goto(SITE,wait_until='domcontentloaded');page.wait_for_timeout(300)
+            result=page.evaluate('''() => {
+              const safe='https://raw.githubusercontent.com/3William33/sannan-yanyan-advent-2026/main/assets/test/example.webp';
+              Backend.hide(7,[
+                {type:'photo',photo:{front:{url:safe,frame:'polaroid',positionX:999},back:{text:'测试背面'}}},
+                {type:'comic',comic:{mode:'spread',pages:[{url:safe,alt:'测试页'}]}},
+                {type:'scrapbook',layout:{title:'测试手账',text:'虚构正文',paper:'grid',stickers:[{char:'★',x:150,y:-2,scale:9}]}}
+              ],'dessin');
+              const s=JSON.parse(localStorage.getItem('advent-web-save-v1'));const items=s.human_gifts['7'][0].items_v2;
+              let rejected=false;try{Backend.hide(7,[{type:'photo',photo:{front:{url:'javascript:alert(1)'}}}],'dessin');}catch{rejected=true;}
+              return {items,rejected};
+            }''')
+            assert [x['type'] for x in result['items']]==['photo','comic','scrapbook']
+            assert result['items'][0]['photo']['front']['positionX']==100
+            assert result['items'][2]['layout']['stickers'][0]['x']==100
+            assert result['rejected']
+            context.close()
         browser.close()
         print(f'PASS {engine_name}')
