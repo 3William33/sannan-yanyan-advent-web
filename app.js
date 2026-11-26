@@ -322,7 +322,8 @@ function showGiftCard(day, gifts, remoteExtras, sannanExtras, rect, doneFn, over
   if (giftSections.length > 1) {
     const folder = document.createElement('div'); folder.className = 'adv-accordion-folder';
     const tabs = document.createElement('div'); tabs.className = 'adv-accordion-tabs';
-    const select = i => giftSections.forEach((s,j)=>{s.el.classList.toggle('pulled',i===j); s.el.hidden=i!==j; tabs.children[j]?.classList.toggle('on',i===j);});
+    giftSections.forEach(s=>{const seal=document.createElement('button');seal.type='button';seal.className='adv-envelope-seal';seal.innerHTML='<span>✦</span><b>轻触拆开火漆</b>';seal.onclick=()=>{s.el.classList.remove('sealed');s.el.classList.add('opened');};s.el.prepend(seal);s.el.classList.add('sealed');});
+    const select = i => giftSections.forEach((s,j)=>{s.el.classList.toggle('pulled',i===j);s.el.hidden=i!==j;tabs.children[j]?.classList.toggle('on',i===j);if(i===j&&!s.el.classList.contains('opened'))s.el.classList.add('sealed');});
     giftSections.forEach((s,i)=>{const b=document.createElement('button');b.type='button';b.className='adv-accordion-tab';b.title=s.title;b.textContent=(s.fresh?'★ ':'')+(s.title.length>12?s.title.slice(0,12)+'…':s.title);b.onclick=()=>select(i);tabs.appendChild(b);});
     folder.appendChild(tabs); body.prepend(folder); select(0);
   }
@@ -514,6 +515,10 @@ function renderItem(container, item, day, role, existingAnswer, giftId = '') {
     return;
   }
 
+  if (item.type === 'scrapbook' && item.layout) {
+    const page=document.createElement('div');page.className='adv-scrap-read';const h=document.createElement('h3');h.textContent=item.layout.title||'冬日手账';const p=document.createElement('p');p.textContent=item.layout.text||'';page.append(h,p);for(const s of item.layout.stickers||[]){if(s.src)continue;const mark=document.createElement('span');mark.textContent=s.char;mark.style.left=s.x+'%';mark.style.top=s.y+'%';mark.style.opacity=s.opacity??1;mark.style.transform=`translate(-50%,-50%) scale(${s.scale||1}) rotate(${s.rotate||0}deg)`;page.appendChild(mark);}container.appendChild(page);return;
+  }
+
   if ((item.type === 'voice' || item.type === 'audio') && item.url) {
     (async () => {
       const src = await Backend.resolveMediaUrl(item.url);
@@ -594,7 +599,7 @@ function renderRemoteEntry(container, entry, label, day) {
   const source = Array.isArray(entry.items_v2) && entry.items_v2.length
     ? entry.items_v2
     : (Array.isArray(entry.items) && entry.items.length ? entry.items : legacyEntryItems(entry));
-  const items = source.filter(item => item && ['text', 'question', 'song', 'abc', 'image', 'photo', 'comic', 'voice', 'audio', 'attachment'].includes(item.type));
+  const items = source.filter(item => item && ['text', 'question', 'song', 'abc', 'image', 'photo', 'comic', 'scrapbook', 'voice', 'audio', 'attachment'].includes(item.type));
   if (!items.length) return null;
   const half = document.createElement('div');
   half.className = 'adv-half';
@@ -615,11 +620,48 @@ function appendMemoryActions(container, id, day) {
   const key = `advent-v4-favorite:${id}`;
   const row = document.createElement('div'); row.className = 'adv-memory-actions';
   const fav = document.createElement('button'); fav.className = 'adv-btn';
-  const sync = () => { fav.textContent = localStorage.getItem(key) === '1' ? '★ 已收藏' : '☆ 收藏'; };
-  fav.onclick = () => { localStorage.getItem(key) === '1' ? localStorage.removeItem(key) : localStorage.setItem(key, '1'); sync(); };
+  const sync = () => { fav.textContent = localStorage.getItem(key) ? '★ 已收藏' : '☆ 收藏'; };
+  fav.onclick = () => { localStorage.getItem(key) ? localStorage.removeItem(key) : localStorage.setItem(key, JSON.stringify({id,day,saved_at:Date.now()})); sync(); };
   const reply = document.createElement('button'); reply.className = 'adv-btn'; reply.textContent = '↩ 写回信';
   reply.onclick = () => openReplyComposer(id, day);
   row.append(fav, reply); sync(); container.appendChild(row);
+}
+
+function openDeskSheet(title, subtitle='Christmas desk') {
+  const overlay=document.getElementById('overlay');overlay.innerHTML='';overlay.style.display='flex';overlay.classList.add('on');
+  const sheet=document.createElement('div');sheet.className='adv-sheet adv-paper';const frame=document.createElement('div');frame.className='adv-frame';
+  frame.innerHTML=`<div class="adv-ctop"><span class="d"></span><span class="by"></span></div>`;frame.querySelector('.d').textContent=title;frame.querySelector('.by').textContent=subtitle;
+  const body=document.createElement('div');body.className='adv-body adv-desk-sheet-body';const row=document.createElement('div');row.className='adv-row';const close=document.createElement('button');close.className='adv-btn';close.textContent='关上';close.onclick=closeMainOverlay;row.appendChild(close);frame.append(body,row);sheet.appendChild(frame);overlay.appendChild(sheet);overlay.onclick=e=>{if(e.target===overlay)closeMainOverlay();};return {body,row};
+}
+
+function openTodayNote() {
+  const {body,row}=openDeskSheet('今日便签','petit mot');const key=`advent-v4-note:${Backend.getWho()}:${new Date().toISOString().slice(0,10)}`;
+  const ta=document.createElement('textarea');ta.className='adv-ta adv-today-note';ta.maxLength=280;ta.placeholder='留一句简短的冬日留言…';ta.value=localStorage.getItem(key)||'';
+  const save=document.createElement('button');save.className='adv-btn solid';save.textContent='贴到桌上';save.onclick=()=>{localStorage.setItem(key,ta.value);toast('今日便签已贴好');closeMainOverlay();};body.appendChild(ta);row.appendChild(save);
+}
+
+function openPhotoFrame() {
+  const {body,row}=openDeskSheet('桌面相框','photo frame');const key=`advent-v4-frame:${Backend.getWho()}`;let data={};try{data=JSON.parse(localStorage.getItem(key)||'{}');}catch{}
+  const card=document.createElement('div');card.className='adv-frame-photo-card';const front=document.createElement('div');front.className='adv-frame-photo-front';const img=document.createElement('img');img.alt='桌面相框';if(data.src)img.src=data.src;front.appendChild(img);const back=document.createElement('div');back.className='adv-frame-photo-back';back.textContent=data.note||'照片背面还没有留言';card.append(front,back);card.onclick=()=>card.classList.toggle('flipped');
+  const upload=document.createElement('input');upload.type='file';upload.accept='image/png,image/jpeg,image/webp';upload.className='adv-file';const note=document.createElement('textarea');note.className='adv-ta';note.placeholder='写在照片背面的留言';note.value=data.note||'';let src=data.src||'';upload.onchange=e=>{const f=e.target.files?.[0];if(!f||f.size>3*1024*1024)return toast('照片需小于 3MB');const rd=new FileReader();rd.onload=()=>{src=String(rd.result);img.src=src;};rd.readAsDataURL(f);};
+  const save=document.createElement('button');save.className='adv-btn solid';save.textContent='放进相框';save.onclick=()=>{try{localStorage.setItem(key,JSON.stringify({src,note:note.value.slice(0,1000)}));toast('相框已更新');closeMainOverlay();}catch{toast('照片太大，无法保存在浏览器');}};body.append(card,upload,note);row.appendChild(save);
+}
+
+function openPostOffice() {
+  const {body}=openDeskSheet('圣诞邮局','Christmas post');const b=Backend.getBoard();const list=document.createElement('div');list.className='adv-post-list';
+  const favorites=[];for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k?.startsWith('advent-v4-favorite:')){let v={id:k.slice(19)};try{v=JSON.parse(localStorage.getItem(k))||v;}catch{}favorites.push(v);}}
+  const opened=(b.cells||[]).filter(c=>Object.keys(c.opened_by||{}).length);const newCount=(b.cells||[]).reduce((n,c)=>n+(c.new_count||0),0);
+  list.innerHTML=`<div class="adv-post-summary"><b>${newCount}</b><span>新礼物与追加</span><b>${opened.length}</b><span>已开启日期</span><b>${favorites.length}</b><span>收藏</span></div>`;
+  opened.forEach(c=>{const item=document.createElement('button');item.type='button';item.className='adv-post-item';item.innerHTML=`<span>${c.day} déc.</span><small>${c.new_count?`${c.new_count} 件未读追加`:'窗户已经点亮'}</small>`;item.onclick=()=>{closeMainOverlay();onWindowTap(c.day);};list.appendChild(item);});
+  if(favorites.length){const h=document.createElement('h3');h.textContent='收藏夹';list.appendChild(h);favorites.forEach(f=>{const p=document.createElement('p');p.className='adv-favorite-line';p.textContent=`★ ${f.day?`12月${f.day}日 · `:''}${f.id||'礼物'}`;list.appendChild(p);});}body.appendChild(list);
+}
+
+function openRecordPlayer() {
+  const {body}=openDeskSheet('圣诞唱片机','music for us');const player=document.getElementById('deskAudio');
+  const controls=document.createElement('div');controls.className='adv-record-player';controls.innerHTML='<div class="adv-record-disc">♫</div><button class="adv-btn" type="button">播放 / 暂停</button><label>音量 <input type="range" min="0" max="1" step="0.05"></label><div class="adv-record-list"></div>';
+  const play=controls.querySelector('button'),volume=controls.querySelector('input'),list=controls.querySelector('.adv-record-list');volume.value=player.volume;play.onclick=()=>player.src?(player.paused?player.play().catch(()=>toast('请再次点击播放')):player.pause()):toast('先从下面选择一段音频');volume.oninput=()=>player.volume=+volume.value;
+  const tracks=[];for(const c of board?.cells||[]){if(!Object.keys(c.opened_by||{}).length)continue;const entries=[c.gifts?.ai,...(c.gifts?.human_entries||[])].filter(Boolean);for(const e of entries)for(const it of e.items_v2||e.items||[])if(['audio','voice'].includes(it.type)&&it.url)tracks.push({day:c.day,name:it.name||`12月${c.day}日的声音`,url:it.url});}
+  if(!tracks.length){const p=document.createElement('p');p.className='adv-hint';p.textContent='已开启的礼物里还没有可直接播放的音频。Spotify/网易云仍从礼物中的播放器打开。';list.appendChild(p);}tracks.forEach(t=>{const b=document.createElement('button');b.type='button';b.className='adv-post-item';b.textContent=t.name;b.onclick=async()=>{const src=await Backend.resolveMediaUrl(t.url);if(src){player.src=src;player.play().catch(()=>toast('Safari 需要再次点击播放'));controls.querySelector('.adv-record-disc').classList.add('playing');}};list.appendChild(b);});body.appendChild(controls);
 }
 
 function openReplyComposer(id, day) {
@@ -637,7 +679,7 @@ function openReplyComposer(id, day) {
 function openScrapbook() {
   const overlay = document.getElementById('overlay'); overlay.innerHTML = ''; overlay.style.display = 'flex'; overlay.classList.add('on');
   const sheet = document.createElement('div'); sheet.className = 'adv-sheet adv-paper';
-  sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">手账抽屉</span><span class="by">scrapbook</span></div><p class="adv-editor-intro">拖动贴纸，留下今天的页面。草稿只保存在当前浏览器。</p><label class="adv-lab">信纸标题</label><input class="adv-in1" id="scrapTitle" placeholder="十二月的某一天"><label class="adv-lab">正文</label><textarea class="adv-ta" id="scrapText" placeholder="写一点冬天的事…"></textarea><div class="adv-sticker-tray"><button type="button" data-sticker="★">★</button><button type="button" data-sticker="❄">❄</button><button type="button" data-sticker="♡">♡</button><button type="button" data-sticker="🍪">🍪</button><label class="adv-sticker-upload">＋ PNG<input id="stickerUpload" type="file" accept="image/png,image/webp" hidden></label></div><div class="adv-sticker-tools"><button type="button" data-action="smaller">−</button><button type="button" data-action="larger">＋</button><button type="button" data-action="rotate">↻</button><button type="button" data-action="fade">◐</button><button type="button" data-action="back">↓</button><button type="button" data-action="front">↑</button><button type="button" data-action="copy">复制</button><button type="button" data-action="delete">删除</button><button type="button" data-action="undo">撤销</button><button type="button" data-action="redo">重做</button></div><div class="adv-scrap-canvas" id="scrapCanvas"></div><div class="adv-row"><button class="adv-btn" id="scrapExport">导出图片</button><button class="adv-btn" id="scrapClose">关上</button><button class="adv-btn solid" id="scrapSave">保存手账</button></div></div>';
+  sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">手账抽屉</span><span class="by">scrapbook</span></div><p class="adv-editor-intro">拖动贴纸，留下今天的页面。草稿只保存在当前浏览器。</p><label class="adv-lab">礼物日期</label><input class="adv-in1" id="scrapDay" type="number" min="1" max="25" value="1"><label class="adv-lab">信纸标题</label><input class="adv-in1" id="scrapTitle" placeholder="十二月的某一天"><label class="adv-lab">正文</label><textarea class="adv-ta" id="scrapText" placeholder="写一点冬天的事…"></textarea><div class="adv-sticker-tray"><button type="button" data-sticker="★">★</button><button type="button" data-sticker="❄">❄</button><button type="button" data-sticker="♡">♡</button><button type="button" data-sticker="🍪">🍪</button><label class="adv-sticker-upload">＋ PNG<input id="stickerUpload" type="file" accept="image/png,image/webp" hidden></label></div><div class="adv-sticker-tools"><button type="button" data-action="smaller">−</button><button type="button" data-action="larger">＋</button><button type="button" data-action="rotate">↻</button><button type="button" data-action="fade">◐</button><button type="button" data-action="back">↓</button><button type="button" data-action="front">↑</button><button type="button" data-action="copy">复制</button><button type="button" data-action="delete">删除</button><button type="button" data-action="undo">撤销</button><button type="button" data-action="redo">重做</button></div><div class="adv-scrap-canvas" id="scrapCanvas"></div><div class="adv-row"><button class="adv-btn" id="scrapExport">导出图片</button><button class="adv-btn" id="scrapClose">关上</button><button class="adv-btn" id="scrapSave">保存草稿</button><button class="adv-btn solid" id="scrapPublish">封成礼物</button></div></div>';
   overlay.appendChild(sheet);
   const title = sheet.querySelector('#scrapTitle'), text = sheet.querySelector('#scrapText'), canvas = sheet.querySelector('#scrapCanvas');
   let selected = null, history = [], future = [];
@@ -653,6 +695,7 @@ function openScrapbook() {
   sheet.querySelector('.adv-sticker-tools').onclick=e=>{const a=e.target.dataset.action;if(!a)return;if(a==='undo'){if(!history.length)return;future.push(snapshot());restore(history.pop());return;}if(a==='redo'){if(!future.length)return;history.push(snapshot());restore(future.pop());return;}if(!selected)return toast('先点选一枚贴纸');remember();if(a==='delete'){selected.remove();selected=null;return;}if(a==='copy'){addStickerFromData({...snapshot().find((_,i)=>canvas.children[i]===selected),x:parseFloat(selected.style.left)+4,y:parseFloat(selected.style.top)+4});return;}if(a==='smaller')selected.dataset.scale=Math.max(.3,+selected.dataset.scale-.1);if(a==='larger')selected.dataset.scale=Math.min(3,+selected.dataset.scale+.1);if(a==='rotate')selected.dataset.rotate=(+selected.dataset.rotate+15)%360;if(a==='fade')selected.dataset.opacity=Math.max(.2,+selected.dataset.opacity-.2);if(a==='back')selected.style.zIndex=Math.max(0,+selected.style.zIndex-1);if(a==='front')selected.style.zIndex=+selected.style.zIndex+1;applySticker(selected);};
   sheet.querySelector('#scrapExport').onclick=()=>{const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));const marks=snapshot().filter(s=>!s.src).map(s=>`<text x="${s.x*12}" y="${s.y*16}" font-size="${42*s.scale}" opacity="${s.opacity}" transform="rotate(${s.rotate} ${s.x*12} ${s.y*16})">${esc(s.char)}</text>`).join('');const lines=esc(text.value).split('\n').map((l,i)=>`<text x="100" y="${260+i*42}" font-size="25" fill="#3a2f28">${l}</text>`).join('');const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600"><rect width="100%" height="100%" fill="#f5ead2"/><rect x="55" y="55" width="1090" height="1490" fill="none" stroke="#9a6b35" stroke-width="3"/><text x="100" y="160" font-size="52" fill="#7d1f22">${esc(title.value||'冬日手账')}</text>${lines}${marks}</svg>`;const blob=new Blob([svg],{type:'image/svg+xml'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='christmas-scrapbook.svg';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
   sheet.querySelector('#scrapClose').onclick = closeMainOverlay; sheet.querySelector('#scrapSave').onclick = () => { localStorage.setItem('advent-v4-scrapbook', JSON.stringify({title:title.value.slice(0,200), text:text.value.slice(0,6000), stickers:snapshot()})); toast('手账草稿已保存'); closeMainOverlay(); };
+  sheet.querySelector('#scrapPublish').onclick=()=>{const day=parseInt(sheet.querySelector('#scrapDay').value,10);if(!day||day<1||day>25)return toast('日期要在 1—25 之间');const layout={title:title.value.slice(0,200),text:text.value.slice(0,6000),stickers:snapshot().filter(s=>!s.src)};try{Backend.hide(day,[{type:'scrapbook',layout}], 'dessin');localStorage.removeItem('advent-v4-scrapbook');board=Backend.getBoard();refresh();toast(`手账已封进12月${day}日`);closeMainOverlay();}catch(e){toast(e.message);}};
   overlay.onclick = e => { if (e.target === overlay) closeMainOverlay(); };
 }
 
@@ -1213,15 +1256,15 @@ document.addEventListener('DOMContentLoaded', async () => {
   const deskWrite = document.getElementById('deskWrite');
   const deskDiary = document.getElementById('deskDiary');
   const deskMail = document.getElementById('deskMail');
+  const deskPhoto = document.getElementById('deskPhoto');
+  const deskNote = document.getElementById('deskNote');
   const deskRecord = document.getElementById('deskRecord');
   if (deskWrite) deskWrite.onclick = () => UI.openEditor();
   if (deskDiary) deskDiary.onclick = () => openScrapbook();
-  if (deskMail) deskMail.onclick = () => UI.showArchive();
-  if (deskRecord) deskRecord.onclick = () => {
-    const audio = document.querySelector('audio');
-    if (audio) audio.paused ? audio.play().catch(() => toast('请再次点击唱片机开始播放')) : audio.pause();
-    else toast('唱片机已准备好：打开一份音乐礼物后可继续播放');
-  };
+  if (deskMail) deskMail.onclick = () => openPostOffice();
+  if (deskPhoto) deskPhoto.onclick = () => openPhotoFrame();
+  if (deskNote) deskNote.onclick = () => openTodayNote();
+  if (deskRecord) deskRecord.onclick = () => openRecordPlayer();
   refreshWhoBtn();
   const whoBtn = document.getElementById('whoBtn');
   if (whoBtn) {

@@ -33,6 +33,11 @@ with sync_playwright() as p:
                 page.locator('#deskDiary').click(); page.wait_for_timeout(100)
                 assert page.locator('#scrapCanvas').is_visible()
                 assert page.locator('.adv-zoom.on').count() == 1
+                page.locator('#scrapClose').click()
+                for trigger, expected in [('#deskNote','.adv-today-note'),('#deskPhoto','.adv-frame-photo-card'),('#deskMail','.adv-post-summary'),('#deskRecord','.adv-record-player')]:
+                    page.locator(trigger).click(); page.wait_for_timeout(50)
+                    assert page.locator(expected).is_visible(), f'{trigger} panel failed'
+                    page.locator('.adv-sheet .adv-row .adv-btn', has_text='关上').click()
             assert not errors, errors
             if engine_name == 'chromium' and (width,height) in ((1440,900),(1024,768),(390,844)):
                 page.screenshot(path=str(OUT/f'v4-{width}x{height}.png'), full_page=True)

@@ -223,7 +223,7 @@ loadRemoteCache();
 
 /* ── 礼物条目规范化（与 Python clean_item / normalize_* 一致）──────── */
 
-const ITEM_TYPES = new Set(['text', 'question', 'song', 'abc', 'image', 'photo', 'comic', 'voice', 'audio', 'attachment']);
+const ITEM_TYPES = new Set(['text', 'question', 'song', 'abc', 'image', 'photo', 'comic', 'scrapbook', 'voice', 'audio', 'attachment']);
 const TEXT_FIELDS = { text: 6000, abc: 12000, name: 200, artist: 200, provider: 40, mime: 100, filename: 240 };
 
 function isSafeLocalUploadUrl(url) {
@@ -262,6 +262,7 @@ function cleanItem(item, { allowLocal = true } = {}) {
   const out = { type: kind };
   if (kind === 'photo' && item.photo && typeof item.photo === 'object') out.photo = item.photo;
   if (kind === 'comic' && item.comic && typeof item.comic === 'object') out.comic = item.comic;
+  if (kind === 'scrapbook' && item.layout && typeof item.layout === 'object') out.layout = item.layout;
   for (const [field, limit] of Object.entries(TEXT_FIELDS)) {
     if (item[field] !== undefined && item[field] !== null) out[field] = String(item[field]).slice(0, limit);
   }
@@ -271,7 +272,7 @@ function cleanItem(item, { allowLocal = true } = {}) {
     if (allowLocal && isSafeLocalUploadUrl(url)) { /* 本地暂存资源 */ out.__local = true; }
     if (valid || (allowLocal && isSafeLocalUploadUrl(url))) out.url = url;
   }
-  if (out.text || out.abc || out.url || out.photo || out.comic) return out;
+  if (out.text || out.abc || out.url || out.photo || out.comic || out.layout) return out;
   return null;
 }
 
