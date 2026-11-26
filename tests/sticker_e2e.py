@@ -247,6 +247,9 @@ def run_browser(pw, browser_type, label):
         check(f'[{label}] 竖屏有收纳册折叠按钮', page.locator('#stklibToggle').count() == 1)
         overflow = page.evaluate('document.documentElement.scrollWidth > document.documentElement.clientWidth + 1')
         check(f'[{label}] 竖屏无横向溢出', not overflow)
+        # iPhone 竖屏：底部「手账贴纸」按钮可作为入口（书桌此时隐藏）
+        entry = page.locator('.adv-links [onclick="UI.openScrapbook()"]')
+        check(f'[{label}] iPhone 竖屏有手账入口', entry.count() == 1 and entry.is_visible())
         # 深浅色：body 加 dusk 类后收纳册文字色变化（可读性）
         page.evaluate("document.body.classList.add('dusk')")
         page.wait_for_timeout(80)

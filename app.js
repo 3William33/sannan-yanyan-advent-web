@@ -1436,6 +1436,7 @@ function kindToIcon(kind) {
 /* ── 暴露给 HTML inline onclick ─────────────────────────────────── */
 window.UI = {
   openEditor,
+  openScrapbook,
   syncNow: syncRemote,
   showArchive,
   showPublish,
