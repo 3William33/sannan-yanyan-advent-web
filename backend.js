@@ -223,7 +223,7 @@ loadRemoteCache();
 
 /* ── 礼物条目规范化（与 Python clean_item / normalize_* 一致）──────── */
 
-const ITEM_TYPES = new Set(['text', 'question', 'song', 'abc', 'image', 'voice', 'audio', 'attachment']);
+const ITEM_TYPES = new Set(['text', 'question', 'song', 'abc', 'image', 'photo', 'comic', 'voice', 'audio', 'attachment']);
 const TEXT_FIELDS = { text: 6000, abc: 12000, name: 200, artist: 200, provider: 40, mime: 100, filename: 240 };
 
 function isSafeLocalUploadUrl(url) {
@@ -260,6 +260,8 @@ function cleanItem(item, { allowLocal = true } = {}) {
   if (!item || typeof item !== 'object' || !ITEM_TYPES.has(item.type)) return null;
   const kind = item.type;
   const out = { type: kind };
+  if (kind === 'photo' && item.photo && typeof item.photo === 'object') out.photo = item.photo;
+  if (kind === 'comic' && item.comic && typeof item.comic === 'object') out.comic = item.comic;
   for (const [field, limit] of Object.entries(TEXT_FIELDS)) {
     if (item[field] !== undefined && item[field] !== null) out[field] = String(item[field]).slice(0, limit);
   }
@@ -269,7 +271,7 @@ function cleanItem(item, { allowLocal = true } = {}) {
     if (allowLocal && isSafeLocalUploadUrl(url)) { /* 本地暂存资源 */ out.__local = true; }
     if (valid || (allowLocal && isSafeLocalUploadUrl(url))) out.url = url;
   }
-  if (out.text || out.abc || out.url) return out;
+  if (out.text || out.abc || out.url || out.photo || out.comic) return out;
   return null;
 }
 
@@ -297,7 +299,7 @@ function normalizeEntry(entry, fallbackId, { allowLocal = true } = {}) {
   const items = entryItems(entry, { allowLocal });
   if (!items.length) return null;
   const created = String(entry.created_at || entry.at || '').slice(0, 80);
-  return {
+  const out = {
     id: String(entry.id || fallbackId).slice(0, 160),
     from: String(entry.from || '').slice(0, 80),
     title: String(entry.title || '').slice(0, 300),
@@ -307,6 +309,11 @@ function normalizeEntry(entry, fallbackId, { allowLocal = true } = {}) {
     created_at: created,
     at: created,
   };
+  // V4 可选字段：只做浅层安全保留，旧协议字段和未知字段不被覆盖。
+  for (const key of ['paper', 'stickers', 'photo', 'comic', 'reply_to', 'favorite', 'editor_version']) {
+    if (entry[key] !== undefined) out[key] = entry[key];
+  }
+  return out;
 }
 
 function normalizeDays(value, { allowLocal = false } = {}) {

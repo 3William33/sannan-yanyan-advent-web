@@ -479,6 +479,16 @@ function renderItem(container, item, day, role, existingAnswer, giftId = '') {
     return;
   }
 
+  if (item.type === 'photo' || item.photo) {
+    renderPhoto(container, item.photo || item, item.name || '一张冬日照片');
+    return;
+  }
+
+  if (item.type === 'comic' || item.comic) {
+    renderComic(container, item.comic || item, item.name || '冬日绘本');
+    return;
+  }
+
   if ((item.type === 'voice' || item.type === 'audio') && item.url) {
     (async () => {
       const src = await Backend.resolveMediaUrl(item.url);
@@ -512,6 +522,34 @@ function renderItem(container, item, day, role, existingAnswer, giftId = '') {
   }
 }
 
+function renderPhoto(container, photo, title) {
+  const wrap = document.createElement('button');
+  wrap.type = 'button'; wrap.className = 'adv-photo3d'; wrap.setAttribute('aria-label', '翻转照片');
+  const front = document.createElement('span'); front.className = 'adv-photo-face adv-photo-front';
+  const back = document.createElement('span'); back.className = 'adv-photo-face adv-photo-back';
+  const img = document.createElement('img'); img.alt = title; img.loading = 'lazy';
+  const url = photo?.front?.url || photo?.url;
+  if (url) Backend.resolveMediaUrl(url).then(src => { if (src) img.src = src; });
+  front.append(img, Object.assign(document.createElement('small'), { textContent: photo?.front?.title || title }));
+  back.textContent = photo?.back?.text || '背面还没有留言';
+  wrap.append(front, back); wrap.onclick = () => wrap.classList.toggle('flipped'); container.appendChild(wrap);
+}
+
+function renderComic(container, comic, title) {
+  const pages = Array.isArray(comic?.pages) ? comic.pages : [];
+  if (!pages.length) return;
+  const reader = document.createElement('div'); reader.className = 'adv-comic-reader';
+  const img = document.createElement('img'); img.alt = title; img.loading = 'lazy';
+  const caption = document.createElement('span'); caption.className = 'adv-hint';
+  let index = 0;
+  const draw = () => { caption.textContent = `${title} · ${index + 1}/${pages.length}`; const u = pages[index]?.url; if (u) Backend.resolveMediaUrl(u).then(src => { if (src) img.src = src; }); };
+  const prev = document.createElement('button'); prev.className = 'adv-btn'; prev.textContent = '‹';
+  const next = document.createElement('button'); next.className = 'adv-btn'; next.textContent = '›';
+  prev.onclick = () => { index = (index + pages.length - 1) % pages.length; draw(); };
+  next.onclick = () => { index = (index + 1) % pages.length; draw(); };
+  reader.append(img, caption, prev, next); container.appendChild(reader); draw();
+}
+
 function appendMediaCaption(container, item) {
       if (item.name) {
         const cap = document.createElement('div');
@@ -526,7 +564,7 @@ function renderRemoteEntry(container, entry, label, day) {
   const source = Array.isArray(entry.items_v2) && entry.items_v2.length
     ? entry.items_v2
     : (Array.isArray(entry.items) && entry.items.length ? entry.items : legacyEntryItems(entry));
-  const items = source.filter(item => item && ['text', 'question', 'song', 'abc', 'image', 'voice', 'audio', 'attachment'].includes(item.type));
+  const items = source.filter(item => item && ['text', 'question', 'song', 'abc', 'image', 'photo', 'comic', 'voice', 'audio', 'attachment'].includes(item.type));
   if (!items.length) return;
   const half = document.createElement('div');
   half.className = 'adv-half';
@@ -877,6 +915,13 @@ async function openEditor(defaultDay) {
 
   sheet.appendChild(frame);
   overlay.appendChild(sheet);
+  // 草稿只存在本地，按身份/日期隔离；不会进入 Backend.hide 或 GitHub 同步。
+  const draftKey = `advent-v4-draft:${Backend.getWho()}:${dayIn.value || 'new'}`;
+  const draftFields = [...sheet.querySelectorAll('input:not([type=file]), textarea')];
+  try { const draft = JSON.parse(localStorage.getItem(draftKey) || 'null'); if (draft?.values) draftFields.forEach((el, i) => { if (draft.values[i] !== undefined) el.value = draft.values[i]; }); } catch { /* ignore malformed local draft */ }
+  const persistDraft = () => { try { localStorage.setItem(draftKey, JSON.stringify({ version:1, saved_at:Date.now(), values:draftFields.map(el => el.value) })); } catch { /* storage full */ } };
+  draftFields.forEach(el => el.addEventListener('input', persistDraft));
+  saveBtn.addEventListener('click', () => { try { localStorage.removeItem(draftKey); } catch {} }, { once:true });
   overlay.onclick = e => { if (e.target === overlay) closeOverlay(); };
 
   function closeOverlay() {

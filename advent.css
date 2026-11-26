@@ -773,3 +773,17 @@
   .adv-desk-object { min-height:61px; }
 }
 @media (prefers-reduced-motion:reduce) { .adv-puff { animation:none; } .adv-desk-object:hover,.adv-desk-drawer:hover,.adv-desk-pen:hover { transform:none; } }
+
+/* 双面照片与多页绘本：轻量 CSS 3D，不引入渲染库 */
+.adv-photo3d { display:block; width:min(100%,260px); min-height:190px; margin:10px auto; padding:0; border:0; background:none; cursor:pointer; perspective:900px; }
+.adv-photo3d:focus-visible { outline:2px solid var(--adv-gold); outline-offset:4px; }
+.adv-photo3d > .adv-photo-face { display:flex; position:relative; min-height:190px; box-sizing:border-box; align-items:center; justify-content:center; flex-direction:column; padding:12px; border:8px solid #fffaf0; background:#fffaf0; box-shadow:0 4px 12px rgba(60,30,10,.25); backface-visibility:hidden; -webkit-backface-visibility:hidden; transition:transform .65s cubic-bezier(.3,.7,.2,1); }
+.adv-photo-front img { width:100%; height:145px; object-fit:cover; background:#e6d8bd; }
+.adv-photo-front small { color:#6b4423; margin-top:6px; }
+.adv-photo-back { position:absolute!important; inset:0; transform:rotateY(180deg); align-items:flex-start!important; justify-content:flex-start!important; text-align:left; white-space:pre-wrap; font:15px/1.8 var(--adv-script); color:#6b4423; background:#f8efd9!important; }
+.adv-photo3d.flipped .adv-photo-front { transform:rotateY(180deg); }
+.adv-photo3d.flipped .adv-photo-back { transform:rotateY(360deg); }
+.adv-comic-reader { display:grid; grid-template-columns:36px 1fr 36px; gap:6px; align-items:center; margin:10px 0; }
+.adv-comic-reader img { grid-column:1 / -1; width:100%; max-height:420px; object-fit:contain; background:#fffaf0; }
+.adv-comic-reader .adv-hint { text-align:center; }
+.adv-comic-reader .adv-btn { min-width:32px; padding:2px 8px; }
