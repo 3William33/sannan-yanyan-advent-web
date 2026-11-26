@@ -15,6 +15,20 @@ import { Backend } from './backend.js?v=705ecd1';
 /* ── 常量 ─────────────────────────────────────────────────────────── */
 const TZ = 'Asia/Shanghai';
 const YEAR = 2026;
+const BIRTHDAY = { month: 12, day: 25 };
+
+function shanghaiDateParts() {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit' }).formatToParts(new Date());
+  const out = {}; for (const p of parts) if (p.type !== 'literal') out[p.type] = Number(p.value);
+  return out;
+}
+function daysUntilBirthday() {
+  const p = shanghaiDateParts();
+  const todayUtc = Date.UTC(p.year, p.month - 1, p.day);
+  let targetUtc = Date.UTC(p.year, BIRTHDAY.month - 1, BIRTHDAY.day);
+  if (targetUtc < todayUtc) targetUtc = Date.UTC(p.year + 1, BIRTHDAY.month - 1, BIRTHDAY.day);
+  return Math.round((targetUtc - todayUtc) / 86400000);
+}
 
 /* ── 时间工具 ─────────────────────────────────────────────────────── */
 // 夜间判断统一由 backend 按 Asia/Shanghai + 显示模式计算，避免设备时区差异与重复逻辑
@@ -86,7 +100,10 @@ function refresh() {
   const deskMailStatus = document.getElementById('deskMailStatus');
   if (deskDay) deskDay.textContent = today || '—';
   if (deskDate) deskDate.textContent = today ? `12 月 ${today} 日 · 北京时间` : '十二月 · 北京时间';
-  if (deskCountdown) deskCountdown.textContent = today ? (today >= 25 ? '圣诞快乐，今天也有信' : `距离圣诞还有 ${Math.max(0, 25 - today)} 天`) : '等候十二月的雪';
+  if (deskCountdown) {
+    const birthdayDays = daysUntilBirthday();
+    deskCountdown.textContent = birthdayDays === 0 ? '圣诞快乐 · 生日快乐 🎂' : `距离圣诞与生日还有 ${birthdayDays} 天`;
+  }
   if (deskMailStatus) {
     const incoming = cells.reduce((n, c) => n + (c.new_count || 0), 0);
     deskMailStatus.textContent = incoming ? `${incoming} 件新礼物 / 追加礼物` : `${opened} 扇窗已点亮`;

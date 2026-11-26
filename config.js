@@ -18,6 +18,7 @@ const PARAMS = new URLSearchParams(typeof location !== 'undefined' ? location.se
 export const CONFIG = {
   TZ: 'Asia/Shanghai',
   YEAR: 2026,
+  BIRTHDAY: { month: 12, day: 25, label: '生日' },
 
   OWNER,
   DATA_REPO,
