@@ -15,13 +15,13 @@
  * 数据仓库 assets/sannan/<sha256>.<ext> 并改写为 raw URL。
  *
  * 安全说明：
- *   - GitHub PAT 只保存在当前浏览器标签页的 sessionStorage，关闭标签页即清除，
- *     不写入 localStorage、不进入 URL、不进入任何日志
+ *   - GitHub PAT 默认只保存在当前标签页；用户明确选择记住时才明文写入 localStorage
+ *   - Token 不进入 URL、礼物数据或日志；localStorage 不是安全凭证库
  *   - 解锁规则是客户端交互层限制（与原版本机运行一致），并非服务器端安全边界
  */
 
-import { CONFIG, UPLOAD_MIME_EXT, REMOTE_MEDIA_EXTENSIONS, MAX_UPLOAD_BYTES } from './config.js?v=8a1c3e';
-import { BUILTIN_DAYS } from './builtin-gifts.js?v=8a1c3e';
+import { CONFIG, UPLOAD_MIME_EXT, REMOTE_MEDIA_EXTENSIONS, MAX_UPLOAD_BYTES } from './config.js?v=8.1.0';
+import { BUILTIN_DAYS, BUILTIN_STATS } from './builtin-gifts.js?v=8.1.0';
 
 /* ── 编解码工具（与 advent-gifts-v3.2 协议一致）────────────────────── */
 
@@ -162,6 +162,8 @@ function isPrepPeriod() {
 const SAVE_KEY = 'advent-web-save-v1';
 const REMOTE_CACHE_KEY = 'advent-web-remote-v1';
 const PAT_KEY = 'advent-gh-pat'; // sessionStorage 专用
+const PAT_REMEMBER_KEY = 'advent-gh-pat-remembered';
+let cachedGiftStats = null;
 
 const DEFAULT_SAVE = {
   version: 3,
@@ -218,6 +220,7 @@ function loadRemoteCache() {
     if (c.san) remoteData.san = c.san;
     if (c.yanIndex) remoteIndexes.yan = c.yanIndex;
     if (c.sanIndex) remoteIndexes.san = c.sanIndex;
+    if (c.giftStats) cachedGiftStats = c.giftStats;
   } catch { /* 无缓存则从空开始 */ }
 }
 loadRemoteCache();
@@ -225,7 +228,7 @@ loadRemoteCache();
 /* ── 礼物条目规范化（与 Python clean_item / normalize_* 一致）──────── */
 
 const ITEM_TYPES = new Set(['text', 'question', 'song', 'abc', 'image', 'photo', 'comic', 'scrapbook', 'voice', 'audio', 'attachment']);
-const TEXT_FIELDS = { text: 6000, abc: 12000, name: 200, artist: 200, provider: 40, mime: 100, filename: 240 };
+const TEXT_FIELDS = { text: 6000, abc: 12000, name: 200, artist: 200, album: 200, cover: 500, platform: 40, note: 200, provider: 40, mime: 100, filename: 240 };
 const clamp = (n, min, max, fallback = min) => { n = Number(n); return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback; };
 
 function isSafeLocalUploadUrl(url) {
@@ -272,8 +275,8 @@ function cleanComicData(value, { allowLocal = true } = {}) {
 }
 function cleanScrapbookLayout(value, { allowLocal = true } = {}) {
   if(!value||typeof value!=='object')return null;const stickers=[];
-  for(const s of (Array.isArray(value.stickers)?value.stickers:[]).slice(0,100)){const out={char:String(s.char||'').slice(0,8),x:clamp(s.x,0,100,50),y:clamp(s.y,0,100,50),scale:clamp(s.scale,.2,4,1),rotate:clamp(s.rotate,-360,360,0),opacity:clamp(s.opacity,.1,1,1),z:Math.round(clamp(s.z,0,100,1))};const src=String(s.src||'').slice(0,1000);if(src&&(isAllowedRemoteAsset(src)||(allowLocal&&isSafeLocalUploadUrl(src))))out.src=src;/* 贴纸库元数据：仅元数据，用于重开后识别/替换，不影响解锁与归属 */if(s.name)out.name=String(s.name).slice(0,80);if(s.stickerId)out.stickerId=String(s.stickerId).slice(0,120);if(s.patternId)out.patternId=String(s.patternId).slice(0,120);if(out.char||out.src)stickers.push(out);}
-  return {title:String(value.title||'').slice(0,200),text:String(value.text||'').slice(0,6000),paper:['cream','kraft','grid','snow','botanical','blank'].includes(value.paper)?value.paper:'cream',wax:String(value.wax||'wine').slice(0,30),tape:String(value.tape||'paper').slice(0,30),stickers};
+  for(const s of (Array.isArray(value.stickers)?value.stickers:[]).slice(0,100)){const out={char:String(s.char||'').slice(0,8),x:clamp(s.x,0,100,50),y:clamp(s.y,0,100,50),scale:clamp(s.scale,.2,4,1),rotate:clamp(s.rotate,-360,360,0),opacity:clamp(s.opacity,0,1,1),z:Math.round(clamp(s.z,0,100,1))};const src=String(s.src||'').slice(0,1000);if(src&&(isAllowedRemoteAsset(src)||(allowLocal&&isSafeLocalUploadUrl(src))))out.src=src;/* 贴纸库元数据：仅元数据，用于重开后识别/替换，不影响解锁与归属 */if(s.name)out.name=String(s.name).slice(0,80);if(s.stickerId)out.stickerId=String(s.stickerId).slice(0,120);if(s.patternId)out.patternId=String(s.patternId).slice(0,120);if(out.char||out.src)stickers.push(out);}
+  return {title:String(value.title||'').slice(0,200),text:String(value.text||'').slice(0,6000),paper:['cream','kraft','grid','snow','botanical','blank'].includes(value.paper)?value.paper:'cream',align:['left','center','right'].includes(value.align)?value.align:'left',wax:String(value.wax||'wine').slice(0,30),tape:String(value.tape||'paper').slice(0,30),stickers};
 }
 
 function cleanItem(item, { allowLocal = true } = {}) {
@@ -477,10 +480,10 @@ let _syncPromise = null;
 /* 把异常归类为可展示的原因，便于区分网络失败 / 解析失败 / API 限制 / 缓存回退 */
 function classifyError(e) {
   const msg = String((e && e.message) || e || '');
+  if (e?.rateLimited || /http 429|rate limit|abuse/i.test(msg)) return { reason: 'api_limit', label: 'GitHub 接口限流' };
   if (/abort/i.test(msg)) return { reason: 'timeout', label: '网络超时' };
   if (/failed to fetch|networkerror|load failed|connection/i.test(msg)) return { reason: 'network', label: '网络不可达' };
   if (/http 403|forbidden|permission|write permission/i.test(msg)) return { reason: 'permission', label: '权限不足（无写入/读取授权）' };
-  if (/http 429|rate limit|abuse/i.test(msg)) return { reason: 'api_limit', label: 'GitHub 接口限流' };
   if (/http 404/i.test(msg)) return { reason: 'missing', label: '数据文件尚未创建（正常）' };
   if (/http 5\d\d/i.test(msg)) return { reason: 'server', label: 'GitHub 服务暂时不可用' };
   if (/json|decode|invalid|payload|shape|unexpected|too large/i.test(msg)) return { reason: 'parse', label: '数据解析失败' };
@@ -535,6 +538,7 @@ function writeRemoteCache() {
     localStorage.setItem(REMOTE_CACHE_KEY, JSON.stringify({
       yan: remoteData.yan, san: remoteData.san,
       yanIndex: remoteIndexes.yan, sanIndex: remoteIndexes.san,
+      giftStats: cachedGiftStats,
       fetched_at: shanghaiNowIso(),
     }));
   } catch { /* 缓存失败不影响主流程 */ }
@@ -634,7 +638,10 @@ function syncAll() {
       peekAvailable,
       finished_at: shanghaiNowIso(),
     };
-    if (ok > 0) writeRemoteCache();
+    if (ok > 0) {
+      cachedGiftStats = summarizeGiftStats();
+      writeRemoteCache();
+    }
     _syncPromise = null;
     return { ...syncState };
   })();
@@ -664,6 +671,74 @@ function normalizeIndex(raw, author) {
   return {
     version: 1, author, days,
     updated_at: String(raw?.updated_at || '').slice(0, 80),
+  };
+}
+
+function summarizeGiftStats() {
+  const opened = new Set(save.opened.map(Number));
+  const summarize = (author) => {
+    const published = new Map();
+    const add = (entry, day) => {
+      const id = String(entry?.id || '').slice(0, 160);
+      const dayNumber = Number(day);
+      if (id && Number.isInteger(dayNumber) && dayNumber >= 1 && dayNumber <= 25 && !published.has(id)) {
+        published.set(id, { id, day: dayNumber });
+      }
+    };
+    if (author === 'yan') {
+      for (const [day, entries] of Object.entries(BUILTIN_STATS || {})) {
+        for (const entry of entries || []) add(entry, day);
+      }
+    }
+    for (const [day, entries] of Object.entries(remoteIndexes[author]?.days || {})) {
+      for (const entry of entries || []) add(entry, day);
+    }
+    for (const [day, entries] of Object.entries(remoteData[author]?.days || {})) {
+      for (const entry of entries || []) add(entry, day);
+    }
+    let local = 0;
+    if (author === 'san') {
+      const localIds = new Set();
+      for (const [day, entries] of Object.entries(save.human_gifts || {})) {
+        for (const entry of entries || []) {
+          const id = String(entry?.id || '').slice(0, 160);
+          if (entry?.published === true || !id || published.has(id) || localIds.has(id)) continue;
+          localIds.add(id);
+          local++;
+        }
+      }
+    }
+    let revealed = 0;
+    for (const gift of published.values()) if (opened.has(gift.day)) revealed++;
+    const giftSource = syncState.sources[`${author === 'yan' ? 'yanyan' : 'sannan'}_gifts`];
+    const indexSource = syncState.sources[`${author === 'yan' ? 'yanyan' : 'sannan'}_index`];
+    const fresh = [giftSource, indexSource].some(source => source?.state === 'succeeded' || source?.state === 'empty');
+    const cached = cachedGiftStats?.[author];
+    const useCache = Boolean(cached?.known) && !fresh;
+    const known = fresh || Boolean(cached?.known) || published.size > 0;
+    return {
+      known,
+      fresh,
+      total: useCache ? cached.total : (known ? published.size : 0),
+      revealed: useCache ? cached.revealed : (known ? revealed : 0),
+      unrevealed: useCache ? cached.unrevealed : (known ? Math.max(0, published.size - revealed) : 0),
+      local,
+      updatedAt: useCache ? cached.updatedAt : (cached?.updatedAt || ''),
+    };
+  };
+  const yan = summarize('yan');
+  const san = summarize('san');
+  const known = yan.known || san.known;
+  return {
+    known,
+    fresh: yan.fresh && san.fresh,
+    updatedAt: shanghaiNowIso(),
+    yan,
+    san,
+    total: known ? yan.total + san.total : 0,
+    revealed: known ? yan.revealed + san.revealed : 0,
+    unrevealed: known ? yan.unrevealed + san.unrevealed : 0,
+    local: getWho() === 'san' ? san.local : 0,
   };
 }
 
@@ -743,6 +818,25 @@ function getBoard() {
     });
   }
 
+  const publicTracks = [];
+  const trackKeys = new Set();
+  for (const cell of cells) {
+    if (!save.opened.includes(cell.day)) continue;
+    const entries = [
+      ...(remoteData.yan.days[String(cell.day)] || []),
+      ...(remoteData.san.days[String(cell.day)] || []),
+      ...(cell.gifts?.human_entries || []),
+      ...(cell.gifts?.ai ? [cell.gifts.ai] : []),
+    ];
+    for (const entry of entries) {
+      for (const item of entry.items_v2 || entry.items || []) {
+        if (!['audio', 'voice'].includes(item.type) || !item.url || trackKeys.has(item.url)) continue;
+        trackKeys.add(item.url);
+        publicTracks.push({ day: cell.day, name: item.name || `12月${cell.day}日的声音`, url: item.url });
+      }
+    }
+  }
+
   return {
     today,
     hour: parseInt(shanghaiParts().hour, 10),
@@ -754,6 +848,9 @@ function getBoard() {
     peek_events: events,
     peek_available: syncState.peekAvailable !== false,
     sync: { ...syncState },
+    gift_stats: summarizeGiftStats(),
+    companion: structuredClone(save.companion),
+    public_tracks: publicTracks.slice(0, 30),
     freeze: save.yanyan_freeze,
     cells,
     settings: save.settings,
@@ -900,11 +997,13 @@ function idb() {
 
 async function idbPut(key, blob) {
   const db = await idb();
+  const data = await blob.arrayBuffer();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readwrite');
-    tx.objectStore(IDB_STORE).put(blob, key);
+    tx.objectStore(IDB_STORE).put({ data, type: blob.type }, key);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.onerror = () => reject(tx.error || new Error('浏览器无法暂存文件'));
+    tx.onabort = () => reject(tx.error || new Error('浏览器无法暂存文件'));
   });
 }
 
@@ -913,8 +1012,12 @@ async function idbGet(key) {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(IDB_STORE, 'readonly');
     const req = tx.objectStore(IDB_STORE).get(key);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const value = req.result;
+      if (value && value.data instanceof ArrayBuffer) resolve(new Blob([value.data], { type: value.type || '' }));
+      else resolve(value || null);
+    };
+    req.onerror = () => reject(req.error || new Error('浏览器无法读取暂存文件'));
   });
 }
 
@@ -965,12 +1068,21 @@ function ghHeaders(token) {
   };
 }
 
+async function githubHttpError(status, res) {
+  let message = '';
+  try { message = String((await res.clone().json())?.message || ''); } catch { /* 非 JSON 错误不影响分类 */ }
+  return Object.assign(new Error(`GitHub ${status}`), {
+    status,
+    rateLimited: status === 429 || (status === 403 && (res.headers.get('x-ratelimit-remaining') === '0' || /rate limit|abuse/i.test(message))),
+  });
+}
+
 async function ghGetFile(token, repoPath) {
   const res = await fetch(`${CONFIG.ghApiBase()}${encodeURIComponent(repoPath).replace(/%2F/g, '/')}?ref=${CONFIG.BRANCH}`, {
     headers: ghHeaders(token),
   });
   if (res.status === 404) return { content: null, sha: null };
-  if (!res.ok) throw Object.assign(new Error(`GitHub ${res.status}`), { status: res.status });
+  if (!res.ok) throw await githubHttpError(res.status, res);
   const meta = await res.json();
   const content = meta.content ? b64ToBytes(meta.content.replace(/\n/g, '')) : null;
   return { content, sha: meta.sha };
@@ -987,7 +1099,7 @@ async function ghPutFile(token, repoPath, bytes, message, sha) {
       ...(sha ? { sha } : {}),
     }),
   });
-  if (!res.ok) throw Object.assign(new Error(`GitHub ${res.status}`), { status: res.status });
+  if (!res.ok) throw await githubHttpError(res.status, res);
   return res.json();
 }
 
@@ -996,7 +1108,7 @@ function commitStamp() {
   return `${p.month}-${p.day} ${p.hour}:${p.minute}`;
 }
 
-async function publishLocalAsset(token, url) {
+async function publishLocalAsset(token, url, publishedKeys) {
   if (!isAllowedRemoteAsset(url)) {
     if (!isSafeLocalUploadUrl(url)) throw new Error('unsupported asset URL');
   } else {
@@ -1030,7 +1142,7 @@ async function publishLocalAsset(token, url) {
     if (existingHex !== digest) throw new Error('remote asset hash mismatch');
   }
   const rawUrl = `${CONFIG.rawAssetPrefix}sannan/${digest}${ext}`;
-  await idbDelete(key); // 已转存仓库，释放本地暂存
+  publishedKeys?.add(key);
   return rawUrl;
 }
 
@@ -1052,10 +1164,23 @@ function indexFromDays(daysObj, author) {
   return { version: 1, author, updated_at: shanghaiNowIso(), days };
 }
 
+function mergeGiftIndexes(current, incoming) {
+  const merged = normalizeIndex(current, 'san');
+  const next = normalizeIndex(incoming, 'san');
+  for (const [day, entries] of Object.entries(next.days || {})) {
+    const byId = new Map((merged.days[day] || []).map(entry => [entry.id, entry]));
+    for (const entry of entries) if (!byId.has(entry.id)) byId.set(entry.id, entry);
+    merged.days[day] = [...byId.values()];
+  }
+  merged.updated_at = next.updated_at || merged.updated_at;
+  return merged;
+}
+
 async function publishAll(onProgress) {
-  const token = sessionStorage.getItem(PAT_KEY);
-  if (!token) throw Object.assign(new Error('需要 GitHub Token'), { status: 401 });
+  const token = getPat();
+  if (!token) throw Object.assign(new Error('需要 GitHub Token'), { status: 401, reason: 'not_configured' });
   const progress = (msg) => { try { onProgress?.(msg); } catch { /* ignore */ } };
+  const publishedKeys = new Set();
 
   try {
     /* 1. 上传本地暂存资源 → assets/sannan/<sha256>.<ext> */
@@ -1065,11 +1190,11 @@ async function publishAll(onProgress) {
         if (!entry.items_v2) continue;
         for (const item of entry.items_v2) {
           if (['image', 'voice', 'audio', 'attachment'].includes(item.type) && item.url) {
-            item.url = await publishLocalAsset(token, item.url);
+            item.url = await publishLocalAsset(token, item.url, publishedKeys);
           }
-          if (item.type === 'photo' && item.photo?.front?.url) item.photo.front.url = await publishLocalAsset(token, item.photo.front.url);
-          if (item.type === 'comic' && Array.isArray(item.comic?.pages)) for (const page of item.comic.pages) page.url = await publishLocalAsset(token, page.url);
-          if (item.type === 'scrapbook' && Array.isArray(item.layout?.stickers)) for (const sticker of item.layout.stickers) if (sticker.src) sticker.src = await publishLocalAsset(token, sticker.src);
+          if (item.type === 'photo' && item.photo?.front?.url) item.photo.front.url = await publishLocalAsset(token, item.photo.front.url, publishedKeys);
+          if (item.type === 'comic' && Array.isArray(item.comic?.pages)) for (const page of item.comic.pages) page.url = await publishLocalAsset(token, page.url, publishedKeys);
+          if (item.type === 'scrapbook' && Array.isArray(item.layout?.stickers)) for (const sticker of item.layout.stickers) if (sticker.src) sticker.src = await publishLocalAsset(token, sticker.src, publishedKeys);
         }
       }
     }
@@ -1117,6 +1242,14 @@ async function publishAll(onProgress) {
       }
     }
 
+    progress('正在核实远程礼物…');
+    const { content: verifiedContent } = await ghGetFile(token, 'sannan_gifts.json');
+    if (!verifiedContent) throw new Error('远程核实失败：没有读到刚发布的礼物文件');
+    const verified = decodePayload(JSON.parse(new TextDecoder().decode(verifiedContent)).payload, SAN_DIGEST);
+    const remoteIds = new Set(Object.values(verified.days || {}).flat().map(entry => entry.id));
+    const missing = Object.values(localDays.days || {}).flat().filter(entry => !remoteIds.has(entry.id)).map(entry => entry.id);
+    if (missing.length) throw new Error(`远程核实失败：${missing.length} 份礼物尚未确认写入`);
+
     /* 非必要步骤：失败只记录告警，不阻断礼物本体与后续步骤（可独立修复重试） */
     const warnings = [];
     const softStep = async (label, fn) => { try { await fn(); } catch (e) { warnings.push(`${label}：${e.message || e}`); } };
@@ -1126,11 +1259,17 @@ async function publishAll(onProgress) {
     await softStep('礼物索引', async () => {
       progress('正在更新礼物索引…');
       for (let attempt = 0; attempt < 4; attempt++) {
-        const { sha } = await ghGetFile(token, 'gift_index_sannan.json');
+        const { content, sha } = await ghGetFile(token, 'gift_index_sannan.json');
+        let current = { version: 1, author: 'san', days: {} };
+        if (content) {
+          try { current = JSON.parse(new TextDecoder().decode(content)); } catch { /* 损坏索引按空索引合并 */ }
+        }
+        const mergedIndex = mergeGiftIndexes(current, index);
         try {
           await ghPutFile(token, 'gift_index_sannan.json',
-            new TextEncoder().encode(JSON.stringify(index, null, 2)),
+            new TextEncoder().encode(JSON.stringify(mergedIndex, null, 2)),
             `Update sannan gift index (${commitStamp()})`, sha);
+          index.days = mergedIndex.days;
           break;
         } catch (e) {
           if ((e.status !== 409 && e.status !== 422) || attempt === 3) throw e;
@@ -1142,7 +1281,7 @@ async function publishAll(onProgress) {
     /* 4. 同步书桌状态（便签/相框/收藏），独立于正式礼物与解锁规则 */
     await softStep('书桌状态', async () => {
       progress('正在同步圣诞书桌…');
-      for(const frame of Object.values(save.companion.frames||{}))if(frame?.src)frame.src=await publishLocalAsset(token,frame.src);
+      for(const frame of Object.values(save.companion.frames||{}))if(frame?.src)frame.src=await publishLocalAsset(token,frame.src,publishedKeys);
       for(let attempt=0;attempt<4;attempt++){
         const {content,sha}=await ghGetFile(token,'companion_state.json');let remote={notes:{},frames:{},favorites:{}};
         if(content){try{const wrapper=JSON.parse(new TextDecoder().decode(content));remote=decodeRaw(wrapper.payload,SAN_DIGEST);}catch{/* 首次或损坏时以本地安全结构重建 */}}
@@ -1187,27 +1326,58 @@ async function publishAll(onProgress) {
     remoteData.san = normalizeDays(merged, { allowLocal: false });
     remoteIndexes.san = index;
     persist();
+    cachedGiftStats = summarizeGiftStats();
     writeRemoteCache();
+    for (const key of publishedKeys) await idbDelete(key);
 
     return { message: warnings.length
       ? `礼物已发布；部分附带数据未同步（${warnings.join('；')}），可稍后重试，礼物不会重复追加`
       : '礼物、资源、索引与偷看记录均已发布', warnings };
   } catch (e) {
-    if (e.status === 401 || e.status === 403) {
-      sessionStorage.removeItem(PAT_KEY); // Token 无效：清除本次会话凭据
-      throw new Error('Token 无效或没有该仓库的写入权限（401/403），请检查 Fine-grained PAT 授权');
+    if (e.status === 401) {
+      clearPat();
+      throw Object.assign(new Error('Token 无效，请重新粘贴 GitHub Token'), { reason: 'invalid_token' });
+    }
+    if (e.status === 403) {
+      if (e.rateLimited) throw Object.assign(new Error('GitHub 接口限流，请稍后重试'), { reason: 'api_limit' });
+      throw Object.assign(new Error('权限不足，请检查 PAT 是否获得该仓库 Contents 读写权限'), { reason: 'permission' });
+    }
+    if (e.status === 429) throw Object.assign(new Error('GitHub 接口限流，请稍后重试'), { reason: 'api_limit' });
+    if (e?.name === 'AbortError' || e instanceof TypeError) {
+      throw Object.assign(new Error('网络连接失败，请检查网络后重试'), { reason: 'network' });
     }
     throw e;
   }
 }
 
-function setPat(token) {
+function getPat() {
+  try { return sessionStorage.getItem(PAT_KEY) || localStorage.getItem(PAT_REMEMBER_KEY) || ''; }
+  catch { return ''; }
+}
+
+function setPat(token, remember = false) {
   const clean = String(token || '').trim();
   if (!clean) throw new Error('Token 不能为空');
   sessionStorage.setItem(PAT_KEY, clean);
+  try {
+    if (remember) localStorage.setItem(PAT_REMEMBER_KEY, clean);
+    else localStorage.removeItem(PAT_REMEMBER_KEY);
+  } catch { /* 浏览器禁用持久存储时仍保留本次会话 */ }
 }
 
-function hasPat() { return Boolean(sessionStorage.getItem(PAT_KEY)); }
+function clearPat() {
+  try { sessionStorage.removeItem(PAT_KEY); } catch { /* ignore */ }
+  try { localStorage.removeItem(PAT_REMEMBER_KEY); } catch { /* ignore */ }
+}
+
+function hasPat() { return Boolean(getPat()); }
+function hasRememberedPat() {
+  try { return Boolean(localStorage.getItem(PAT_REMEMBER_KEY)); } catch { return false; }
+}
+function setPatRemember(remember) {
+  const token = getPat();
+  if (token) setPat(token, Boolean(remember));
+}
 
 /* ── 身份记名（偷看事件归属）──────────────────────────────────────── */
 
@@ -1240,7 +1410,10 @@ export const Backend = {
   isAllowedAssetUrl,
   publish: publishAll,
   setPat,
+  clearPat,
   hasPat,
+  hasRememberedPat,
+  setPatRemember,
   getWho,
   setWho,
   getCompanion,

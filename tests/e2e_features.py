@@ -124,11 +124,9 @@ with sync_playwright() as p:
       const ta = document.querySelector('.adv-sheet textarea'); if (ta) { ta.value='虚构的文字内容'; ta.dispatchEvent(new Event('input')); }
     }''', COVER)
     save_before = pg.evaluate(f'localStorage.getItem("{SAVE_KEY}")')
-    pg.evaluate('''() => {
-      const b = [...document.querySelectorAll('.adv-sheet button')].find(x => x.textContent.includes('预览对方视角'));
-      b && b.click();
-    }''')
-    pg.wait_for_timeout(700)
+    pg.get_by_role('button', name='预览对方视角').click()
+    pg.wait_for_selector('#selfPreviewOverlay .adv-cardbox')
+    pg.wait_for_timeout(400)
     j = pg.evaluate('''() => {
       const host = document.getElementById('selfPreviewOverlay');
       return {

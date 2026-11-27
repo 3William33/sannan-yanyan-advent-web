@@ -78,55 +78,90 @@ function detectMusicType(url) {
 
 const _metaCache = new Map();
 
-function _timeout(ms) {
-  return new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms));
+async function _metadataJson(url, platform) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const res = await fetch(url, { cache: 'no-store', signal: controller.signal });
+    if (!res.ok) {
+      if (res.status === 429) throw Object.assign(new Error('接口暂时限流'), { reason: 'limit' });
+      if (res.status === 403 || res.status === 451) throw Object.assign(new Error('接口或地区暂时不可用'), { reason: 'unavailable' });
+      throw Object.assign(new Error(`元数据接口 HTTP ${res.status}`), { reason: 'unavailable' });
+    }
+    return await res.json();
+  } catch (error) {
+    if (error.name === 'AbortError') throw Object.assign(new Error('识别超时'), { reason: 'timeout' });
+    if (error.reason) throw error;
+    throw Object.assign(new Error(`${platform} 接口跨域或网络不可用`), { reason: 'network' });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
-/** 网易云：尝试详情接口取歌名/歌手/封面；失败返回 null（不缓存失败） */
-async function fetchNeteaseMeta(songId) {
+/** 网易云官方网页详情接口；失败返回 null（不缓存失败）。 */
+async function fetchNeteaseMeta(songId, { strict = false } = {}) {
   const key = `netease:${songId}`;
   if (_metaCache.has(key)) return _metaCache.get(key);
   let meta = null;
   try {
-    const res = await Promise.race([
-      fetch(`https://music.163.com/api/song/detail?ids=${encodeURIComponent('[' + songId + ']')}`, { cache: 'force-cache' }),
-      _timeout(4500),
-    ]);
-    if (res && res.ok) {
-      const data = await res.json();
-      const song = (data.songs && data.songs[0]) || null;
-      if (song) {
-        meta = {
-          title: song.name || '',
-          artist: (song.artists || []).map(a => a.name).filter(Boolean).join(' / '),
-          cover: (song.album && song.album.picUrl) || '',
-        };
-      }
+    const data = await _metadataJson(`https://music.163.com/api/song/detail?ids=${encodeURIComponent('[' + songId + ']')}`, '网易云');
+    const song = (data.songs && data.songs[0]) || null;
+    if (song) {
+      meta = {
+        title: song.name || '',
+        artist: (song.artists || []).map(a => a.name).filter(Boolean).join(' / '),
+        album: song.album?.name || '',
+        cover: song.album?.picUrl || '',
+      };
     }
-  } catch (_) { /* 跨域/超时：降级 */ }
-  _metaCache.set(key, meta);
+  } catch (error) { if (strict) throw error; /* 渲染层降级；编辑器通过 resolveSongMetadata 显示原因。 */ }
+  if (meta) _metaCache.set(key, meta);
   return meta;
 }
 
-/** Spotify：尝试公开 oEmbed 取歌名/歌手/封面；失败返回 null */
-async function fetchSpotifyMeta(url) {
-  const key = `spotify:${url}`;
+/** Spotify 公开 oEmbed；失败返回 null。 */
+async function fetchSpotifyMeta(url, { strict = false } = {}) {
+  const id = parseSpotifyId(url);
+  if (!id) return null;
+  const canonical = `https://open.spotify.com/track/${id}`;
+  const key = `spotify:${id}`;
   if (_metaCache.has(key)) return _metaCache.get(key);
   let meta = null;
   try {
-    const api = `https://open.spotify.com/oembed?url=${encodeURIComponent(url)}`;
-    const res = await Promise.race([fetch(api, { cache: 'force-cache' }), _timeout(4500)]);
-    if (res && res.ok) {
-      const data = await res.json();
+    const data = await _metadataJson(`https://open.spotify.com/oembed?url=${encodeURIComponent(canonical)}`, 'Spotify');
+    if (data.title || data.author_name) {
       meta = {
         title: data.title || '',
         artist: data.author_name || '',
         cover: data.thumbnail_url || '',
+        url: canonical,
       };
     }
-  } catch (_) { /* 降级 */ }
-  _metaCache.set(key, meta);
+  } catch (error) { if (strict) throw error; /* 渲染层降级；编辑器通过 resolveSongMetadata 显示原因。 */ }
+  if (meta) _metaCache.set(key, meta);
   return meta;
+}
+
+async function resolveSongMetadata(raw) {
+  const url = String(raw || '').trim();
+  const kind = detectMusicType(url);
+  if (!kind) return { ok: false, reason: 'unsupported', message: '当前平台暂不支持自动识别' };
+  try {
+    if (kind === 'netease') {
+      const id = parseNeteaseId(url);
+      if (!id) return { ok: false, reason: 'unsupported', message: '短链暂不支持自动识别，请粘贴含歌曲 ID 的完整链接' };
+      const meta = await fetchNeteaseMeta(id, { strict: true });
+      return meta && meta.title
+        ? { ok: true, meta: { ...meta, url: `https://music.163.com/song?id=${id}` } }
+        : { ok: false, reason: 'not_found', message: '未能识别歌曲，请检查链接或稍后重试' };
+    }
+    const meta = await fetchSpotifyMeta(url, { strict: true });
+    return meta && meta.title
+      ? { ok: true, meta }
+      : { ok: false, reason: 'not_found', message: '未能识别歌曲，请检查 Spotify track 链接' };
+  } catch (error) {
+    return { ok: false, reason: error.reason || 'network', message: error.message || '网络或接口暂时不可用' };
+  }
 }
 
 /**
@@ -310,7 +345,7 @@ function loadAbcjs(cb) {
   if (_abcjsCallbacks.length > 1) return; // 已经在加载
 
   const script = document.createElement('script');
-  script.src = 'vendor/abcjs-basic-min.js?v=8a1c3e';
+  script.src = 'vendor/abcjs-basic-min.js?v=8.1.0';
   script.onload = () => {
     _abcjsReady = true;
     _abcjsCallbacks.forEach(fn => fn());
@@ -353,7 +388,7 @@ function renderAbc(container, notation) {
       scoreDiv.style.fontFamily = 'monospace';
       scoreDiv.style.fontSize = '12px';
       scoreDiv.style.whiteSpace = 'pre';
-      scoreDiv.style.color = '#8a6a48';
+      scoreDiv.style.color = 'var(--adv-sepia)';
       scoreDiv.textContent = notation;
       return;
     }
@@ -415,6 +450,12 @@ function renderAbc(container, notation) {
  * 旋转黑胶唱片：中心专辑封面 + 唱片凹槽纹理 + 轴孔，下方歌名/歌手信息条。
  * 返回一个 update(meta) 用于异步补全抓到的封面/歌名。
  */
+function safeCoverUrl(raw) {
+  const value = String(raw || '').trim();
+  if (/^data:image\/(?:png|jpeg|gif|webp);base64,/i.test(value)) return value;
+  try { const url = new URL(value); return url.protocol === 'https:' ? value : ''; } catch { return ''; }
+}
+
 function renderVinyl(container, item) {
   const wrap = document.createElement('div');
   wrap.className = 'adv-vinyl';
@@ -453,7 +494,7 @@ function renderVinyl(container, item) {
     const a = m?.artist || '';
     title.textContent = t;
     sub.textContent = a ? `${a} · 旋转播放` : '旋转播放';
-    const cover = m?.cover || '';
+    const cover = safeCoverUrl(m?.cover);
     if (cover) {
       img.onload = () => label.classList.add('has-cover');
       img.onerror = () => label.classList.remove('has-cover');
@@ -484,7 +525,7 @@ function renderMusicItem(container, item) {
 
   const url = item.url || '';
   const kind = detectMusicType(url);
-  const meta = { title: item.name, artist: item.artist, cover: item.cover };
+  const meta = { title: item.name, artist: item.artist, album: item.album, cover: item.cover };
 
   // 旋转黑胶 + 歌曲信息（歌名/歌手/封面），异步补全抓取到的元数据
   const updateVinyl = renderVinyl(container, item);
@@ -570,6 +611,7 @@ function parseMusicUrl(raw, providedMeta) {
     if (providedMeta.name) extra.name = String(providedMeta.name).slice(0, 200);
     if (providedMeta.artist) extra.artist = String(providedMeta.artist).slice(0, 200);
     if (providedMeta.cover) extra.cover = String(providedMeta.cover).slice(0, 500);
+    if (providedMeta.album) extra.album = String(providedMeta.album).slice(0, 200);
   }
 
   if (kind === 'spotify') {
@@ -600,4 +642,6 @@ window.AdventMusic = {
   parseNeteaseId,
   fetchNeteaseMeta,
   fetchSpotifyMeta,
+  resolveSongMetadata,
+  safeCoverUrl,
 };

@@ -53,6 +53,9 @@ def main() -> None:
         "export const BUILTIN_DAYS = {\n"
         f"{lines},\n"
         "};\n"
+        "export const BUILTIN_STATS = Object.fromEntries(\n"
+        "  Object.keys(BUILTIN_DAYS).map(day => [day, [{ id: `builtin-yan-${day}` }]])\n"
+        ");\n"
     )
     dst.write_text(out, encoding="utf-8")
     print(f"OK: {dst} ({len(days)} days encrypted, plaintext never printed)")

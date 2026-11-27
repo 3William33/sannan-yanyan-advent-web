@@ -8,7 +8,7 @@ V4 保持 `protocol: advent-gifts-v3.2`、北京时间解锁、XOR+Base64 payloa
   "kind": "letter | photo | comic | scrapbook",
   "items_v2": [{"type":"text","text":"..."},{"type":"scrapbook","layout":{"title":"冬日手账","text":"正文","stickers":[{"char":"★","x":50,"y":30,"scale":1,"rotate":0,"opacity":1,"z":1}]}}],
   "paper": {"style":"cream","title":"冬日信","signature":"三三"},
-  "stickers": [{"asset":"stickers/test-star.svg","x":0.5,"y":0.5,"scale":1,"rotate":0,"opacity":1,"z":1}],
+  "stickers": [{"char":"★","src":"","x":50,"y":30,"scale":1,"rotate":0,"opacity":1,"z":1},{"src":"assets/stickers/example.png","x":65,"y":45,"scale":1,"rotate":0,"opacity":1,"z":2}],
   "photo": {"front":{"url":"...","frame":"polaroid","fit":"cover","positionX":50,"positionY":50},"back":{"text":"背面留言","date":"2026-12-01","signature":""}},
   "comic": {"mode":"single | pages | scroll | spread | strip","pages":[{"url":"...","alt":""}]},
   "reply_to":"gift-id",

@@ -128,7 +128,7 @@ def main():
             page.wait_for_timeout(2600)
             page.locator('.adv-front').click()
             page.wait_for_timeout(400)
-            tab3=page.locator('.adv-accordion-tab',has_text='MOCK-礼物甲');tab3.click();page.locator('.adv-envelope-seal:visible').click()
+            tab3=page.locator('.adv-accordion-tab[title="MOCK-礼物甲"]');tab3.click();page.wait_for_timeout(400);page.locator('.adv-envelope-seal:visible').click()
             check('B4 远程礼物在卡片中(砚砚后来追加)', '砚砚后来追加' in page.locator('.adv-body').inner_text())
             page.locator('.adv-btn', has_text='关上').click()
             page.wait_for_timeout(600)
@@ -141,11 +141,11 @@ def main():
             page.wait_for_timeout(2600)
             page.locator('.adv-front').click()
             page.wait_for_timeout(400)
-            tabs_txt = page.locator('.adv-accordion-tabs').inner_text()
-            check('B6 双方礼物同窗合并', 'MOCK-礼物乙' in tabs_txt and 'MOCK-礼物丙' in tabs_txt)
+            tabs_txt = page.locator('.adv-accordion-tab').evaluate_all('(els) => els.map(el => el.title).join(" ")')
+            check('B6 双方礼物同窗合并', 'MOCK-礼物乙' in tabs_txt and 'MOCK-礼物丙' in tabs_txt, tabs_txt)
 
             # 问答保存
-            page.locator('.adv-accordion-tab',has_text='MOCK-礼物乙').click();page.locator('.adv-envelope-seal:visible').click()
+            page.locator('.adv-accordion-tab[title="MOCK-礼物乙"]').click();page.wait_for_timeout(400);page.locator('.adv-envelope-seal:visible').click()
             ta = page.locator('.adv-ta:visible')
             if ta.count():
                 ta.fill('MOCK-测试回答')
@@ -217,6 +217,7 @@ def main():
             page.locator('.adv-front').click()
             page.wait_for_timeout(400)
             page.locator('.adv-accordion-tab').last.click()
+            page.wait_for_timeout(400)
             page.locator('.adv-envelope-seal:visible').click()
             body_txt = page.locator('.adv-body').inner_text()
             check('C4 本地礼物开窗可见(三三放进来的)', '三三放进来的' in body_txt)
@@ -268,9 +269,14 @@ def main():
             pub_msg = publish_and_wait(page, 'test-token')
             check('C15 重复发布幂等成功', '已发布' in pub_msg, pub_msg)
 
-            # 错误 Token → 明确报错
-            pub_msg = publish_and_wait(page, 'wrong-token')
-            check('C16 无效Token明确报错', '失败' in pub_msg and 'Token' in pub_msg, pub_msg)
+            # 错误 Token → 明确报错（先加入一份新的本地礼物，确保确实需要远程写入）
+            result = page.evaluate("""async () => {
+              window.Backend.hide(8, [{type:'text',text:'MOCK-无效Token测试'}], 'lettre');
+              window.Backend.setPat('wrong-token');
+              try { await window.Backend.publish(); return {ok:true}; }
+              catch (error) { return {ok:false, reason:error.reason, message:error.message}; }
+            }""")
+            check('C16 无效Token明确报错', not result['ok'] and result['reason'] == 'invalid_token', result)
             ctx.close()
 
             # ══ D. 砚砚箱定稿快照（freeze）规则 ══
@@ -315,6 +321,7 @@ def main():
             page.wait_for_timeout(400)
             if page.locator('.adv-accordion-tab').count():
                 page.locator('.adv-accordion-tab').last.click()
+                page.wait_for_timeout(400)
                 page.locator('.adv-envelope-seal:visible').click()
             check('D3 12月1-23当天追加被接受', 'MOCK-当天新增' in page.locator('.adv-body').inner_text())
             page.locator('.adv-btn', has_text='关上').click()
@@ -338,6 +345,7 @@ def main():
             page.wait_for_timeout(400)
             if page.locator('.adv-accordion-tab').count():
                 page.locator('.adv-accordion-tab').last.click()
+                page.wait_for_timeout(400)
                 page.locator('.adv-envelope-seal:visible').click()
             check('D5 三三箱不受冻结限制', 'MOCK-三三任意追加' in page.locator('.adv-body').inner_text())
             page.locator('.adv-btn', has_text='关上').click()
@@ -358,8 +366,7 @@ def main():
             page.wait_for_timeout(2600)
             page.locator('.adv-front').click()
             page.wait_for_timeout(400)
-            page.locator('.adv-accordion-tab', has_text='MOCK-礼物甲').click()
-            page.locator('.adv-envelope-seal:visible').click()
+            page.locator('.adv-accordion-tab[title="MOCK-礼物甲"]').click();page.wait_for_timeout(400);page.locator('.adv-envelope-seal:visible').click()
             check('E3 离线时缓存礼物仍可读', '砚砚后来追加' in page.locator('.adv-body').inner_text())
             ctx.close()
 

@@ -15,15 +15,16 @@
 | `advent_game.py` HTTP 接口 | `backend.js` 浏览器端等价实现 |
 | `save.json` 本机存档 | 浏览器 `localStorage`（opened / answers / 偷看记录 / 三三礼物） |
 | `data/uploads/` 上传暂存 | 浏览器 `IndexedDB`，发布时转存仓库 `assets/sannan/<sha256>.<ext>` |
-| DPAPI 保存的 GitHub Token | 仅存在当前标签页 `sessionStorage` 的 Fine-grained PAT，关闭标签页即清除 |
+| DPAPI 保存的 GitHub Token | Fine-grained PAT 默认仅存在当前标签页 `sessionStorage`；只有主动勾选“记住”才明文存入本机 `localStorage` |
 | 砚砚内置礼物（Python 明文） | `builtin-gifts.js` 按 v3.2 协议 XOR+Base64 混淆，解锁后才按天解码 |
 
 ## 发布礼物（三三）
 
 1. 在 GitHub 创建 Fine-grained PAT：只勾选 `sannan-yanyan-advent-2026`
    一个仓库的 **Contents: Read and write** 权限。
-2. 打开网页 → 「⬆ 发布」→ 粘贴 Token → 「发布」。
-   Token 只保存在当前标签页，不写入源码、仓库、URL 或日志。
+2. 打开网页 → 「⬆ 发布」→ 粘贴 Token → 「发布」。Token 不写入源码、仓库、URL 或日志。
+3. 默认关闭标签页即清除。若勾选「在这台设备记住」，Token 会明文保存在该浏览器的
+   `localStorage`；这只省去重复输入，不是安全凭证库。可随时点击「清除本机 Token」。
 
 ## 隐私说明
 

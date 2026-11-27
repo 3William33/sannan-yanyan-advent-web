@@ -4,14 +4,14 @@
  * 网页版说明（GitHub Pages 静态移植）：
  * - 原本由 Python 后端提供的接口（board/touch/seen/answer/hide/sync/publish/upload）
  *   全部由 backend.js 在浏览器端等价实现，本文件的 UI 逻辑保持原样
- * - GitHub PAT 只保存在当前标签页会话（sessionStorage），不进入任何日志或仓库
+ * - GitHub PAT 默认只保存在当前标签页；只有用户明确勾选时才明文保存到 localStorage
  * - data/ 状态保存在浏览器 localStorage，上传媒体暂存 IndexedDB
  */
 
 /* 版本号与 index.html 保持一致：每次发布同步更新，强制移动 Safari 重新拉取（它缓存较强） */
-import { mountHouse, iconSvg } from './house.js?v=8a1c3e';
-import { Backend } from './backend.js?v=8a1c3e';
-import { mountStickerLibrary } from './stickers.js?v=8a1c3e';
+import { mountHouse, iconSvg } from './house.js?v=8.1.0';
+import { Backend } from './backend.js?v=8.1.0';
+import { mountStickerLibrary } from './stickers.js?v=8.1.0';
 
 /* ── 常量 ─────────────────────────────────────────────────────────── */
 const TZ = 'Asia/Shanghai';
@@ -89,7 +89,7 @@ function mountStage() {
 function refresh() {
   if (!board || !houseCtrl) return;
 
-  const { today, night, display, smooth, peeks, peek_counts: peekCounts = {}, cells, sync, peek_available: peekAvailable = true } = board;
+  const { today, night, display, smooth, peeks, peek_counts: peekCounts = {}, cells, sync, peek_available: peekAvailable = true, gift_stats: giftStats, companion, public_tracks: publicTracks = [] } = board;
 
   // 顶栏：已开启数量严格以 opened_by 为准（与格子亮灯同源，杜绝「亮灯但计数0」）
   document.getElementById('topDay').textContent = today || '—';
@@ -113,6 +113,8 @@ function refresh() {
     const incoming = cells.reduce((n, c) => n + (c.new_count || 0), 0);
     deskMailStatus.textContent = incoming ? `${incoming} 件新礼物 / 追加礼物` : `${opened} 扇窗已点亮`;
   }
+  renderGiftStats(giftStats);
+  renderDeskSurface(companion, publicTracks, sync);
 
   // 偷看提示：读取失败时不宣称 0 次，避免出现「已确认无人偷看」的误导
   const peekEl = document.getElementById('peekLine');
@@ -122,6 +124,7 @@ function refresh() {
   // 显示模式（自动 / 白昼 / 夜间）与流畅模式：统一作用于页面与房子
   const page = document.getElementById('page');
   page.classList.toggle('dusk', night);
+  document.body.classList.toggle('adv-night', night);
   page.classList.toggle('adv-smooth', !!smooth);
   // overlay 是 body 的直接子元素，流畅模式也作用于浮层内的礼物卡（黑胶停转等）
   document.body.classList.toggle('adv-smooth', !!smooth);
@@ -145,6 +148,99 @@ function refresh() {
 
   // 同步状态栏：使用后端给出的明确原因，而非笼统的「部分离线缓存」
   applySyncStatus(sync);
+}
+
+const pileLevels = new Map();
+function renderGiftStats(stats) {
+  const yanEl = document.getElementById('yanGiftCount');
+  const sanEl = document.getElementById('sanGiftCount');
+  const summary = document.getElementById('giftSummary');
+  const status = document.getElementById('giftStatsStatus');
+  if (!yanEl || !sanEl || !summary || !status || !stats) return;
+  const updatePile = (name, countEl, known, count) => {
+    countEl.textContent = known ? String(count) : '—';
+    const pile = countEl.closest('.adv-gift-pile');
+    if (!pile) return;
+    let boxes = pile.querySelector('.adv-pile-boxes');
+    if (!boxes) {
+      boxes = document.createElement('div'); boxes.className = 'adv-pile-boxes';
+      pile.querySelector('.adv-pile-scene').appendChild(boxes);
+    }
+    if (!boxes.children.length) {
+      for (let i = 0; i < 8; i++) {
+        const box = document.createElement('span'); box.className = 'adv-pile-box'; boxes.appendChild(box);
+      }
+    }
+    const level = known && count > 0 ? Math.max(1, Math.min(7, Math.ceil(count / 4))) : 0;
+    pile.dataset.level = String(level);
+    const previous = pileLevels.get(name) ?? 0;
+    pileLevels.set(name, known ? count : previous);
+    if (known && count > previous && previous > 0 && !document.body.classList.contains('adv-smooth')) {
+      boxes.classList.remove('pile-grow'); void boxes.offsetWidth; boxes.classList.add('pile-grow');
+      setTimeout(() => boxes.classList.remove('pile-grow'), 420);
+    }
+  };
+  updatePile('yan', yanEl, Boolean(stats.yan?.known), stats.yan?.total || 0);
+  updatePile('san', sanEl, Boolean(stats.san?.known), stats.san?.total || 0);
+  const complete = Boolean(stats.yan?.known && stats.san?.known);
+  const cached = !complete || !stats.fresh;
+  status.textContent = !stats.known ? '统计暂不可用' : cached ? '缓存统计 · 等待完整同步' : '已按礼物编号去重';
+  status.title = stats.updatedAt ? `统计时间：${new Date(stats.updatedAt).toLocaleString('zh-CN')}` : '';
+  summary.replaceChildren();
+  const entries = [
+    ['合计', complete ? stats.total : '—'],
+    ['正式揭晓', complete ? stats.revealed : '—'],
+    ['尚未揭晓', complete ? stats.unrevealed : '—'],
+    ['本地未发布', board?.settings?.who === 'san' ? stats.local || 0 : '仅当前编辑者可见'],
+  ];
+  for (const [label, value] of entries) {
+    const span = document.createElement('span');
+    const strong = document.createElement('b'); strong.textContent = String(value);
+    span.append(label + ' ', strong); summary.appendChild(span);
+  }
+  summary.classList.toggle('is-cache', cached);
+}
+
+function renderDeskSurface(companion, tracks, sync) {
+  const frameSlot = document.getElementById('deskFrameSlot');
+  const noteSlot = document.getElementById('deskNoteSlot');
+  const trackName = document.getElementById('deskTrackName');
+  const trackCard = document.getElementById('deskRecordCard');
+  if (!frameSlot || !noteSlot || !trackName || !trackCard) return;
+  const frames = Object.values(companion?.frames || {}).filter(frame => frame?.src)
+    .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+  const frame = frames[0];
+  frameSlot.replaceChildren();
+  if (frame && ['succeeded', 'empty'].includes(sync?.sources?.companion_state?.state)) {
+    const img = document.createElement('img'); img.alt = '共享桌面照片'; img.loading = 'lazy';
+    Backend.resolveMediaUrl(frame.src).then(src => { if (src && frameSlot.isConnected) img.src = src; }).catch(() => {
+      if (frameSlot.isConnected) frameSlot.textContent = '照片暂时无法载入';
+    });
+    const note = document.createElement('small'); note.textContent = frame.note || '我们的桌面照片';
+    frameSlot.append(img, note);
+  } else {
+    const empty = document.createElement('div'); empty.className = 'adv-empty-frame'; empty.textContent = '♡';
+    const small = document.createElement('small'); small.textContent = '等一张公开的桌面照片';
+    frameSlot.append(empty, small);
+  }
+  const notes = Object.values(companion?.notes || {}).filter(note => note?.text)
+    .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+  const note = notes[0];
+  noteSlot.replaceChildren();
+  if (note && ['succeeded', 'empty'].includes(sync?.sources?.companion_state?.state)) {
+    const by = document.createElement('div'); by.className = 'adv-empty-note';
+    by.textContent = note.who === 'yan' ? 'de 砚砚' : 'de 三三';
+    const text = document.createElement('span'); text.textContent = note.text;
+    noteSlot.append(by, text);
+  } else {
+    const empty = document.createElement('div'); empty.className = 'adv-empty-note';
+    empty.append(document.createTextNode("aujourd'hui "));
+    const text = document.createElement('span'); text.textContent = '把小小的日常留在桌上'; empty.appendChild(text);
+    noteSlot.appendChild(empty);
+  }
+  const current = board?._playingTrack || tracks[0];
+  trackName.textContent = current?.name || (tracks.length ? tracks[0].name : '冬日留声机');
+  trackCard.title = tracks.length ? '打开已公开的音频' : '打开圣诞唱片机';
 }
 
 /* ── 显示模式 / 流畅模式 / 同步状态 ─────────────────────────────── */
@@ -318,7 +414,7 @@ function showGiftCard(day, gifts, remoteExtras, sannanExtras, rect, doneFn, over
       note.textContent = yanGift.note;
       yanSection.appendChild(note);
     }
-    appendMemoryActions(yanSection, yanGift.id || `builtin-yan-${day}`, day);
+    if (overlay?.id !== 'selfPreviewOverlay') appendMemoryActions(yanSection, yanGift.id || `builtin-yan-${day}`, day);
     body.appendChild(yanSection);
     giftSections.push({ el: yanSection, title: yanGift.title || '砚砚的礼物', fresh: false });
   }
@@ -368,7 +464,8 @@ function showGiftCard(day, gifts, remoteExtras, sannanExtras, rect, doneFn, over
   overlay.appendChild(box);
 
   /* 入场动画 */
-  requestAnimationFrame(() => {
+  if (overlay?.id === 'selfPreviewOverlay') overlay.classList.add('on');
+  else requestAnimationFrame(() => {
     const cr = box.getBoundingClientRect();
     const from = `translate(${rect.left + rect.width / 2 - (cr.left + cr.width / 2)}px,${rect.top + rect.height / 2 - (cr.top + cr.height / 2)}px) scale(${rect.width / cr.width || 0.1},${rect.height / cr.height || 0.1})`;
     box.animate(
@@ -406,10 +503,15 @@ function showSelfPreview(day, items) {
   const existing = document.getElementById('selfPreviewOverlay');
   if (existing) existing.remove();
   const host = document.createElement('div');
-  host.className = 'adv-zoom';
+  host.className = 'adv-zoom adv-self-preview';
   host.id = 'selfPreviewOverlay';
+  host.setAttribute('role', 'dialog');
+  host.setAttribute('aria-modal', 'true');
+  host.setAttribute('aria-label', '对方视角预览');
   host.style.zIndex = '1280';
   document.body.appendChild(host);
+  const editor = document.getElementById('overlay');
+  if (editor) editor.classList.add('is-preview-underlay');
 
   const kind = items.some(i => i.type === 'song') ? 'chanson' : 'lettre';
   const gifts = {
@@ -421,7 +523,10 @@ function showSelfPreview(day, items) {
     },
   };
   const rect = { left: innerWidth / 2 - 20, top: innerHeight / 2 - 20, width: 40, height: 40 };
-  showGiftCard(day, gifts, [], [], rect, () => host.remove(), 'selfPreviewOverlay');
+  showGiftCard(day, gifts, [], [], rect, () => {
+    host.remove();
+    document.getElementById('overlay')?.classList.remove('is-preview-underlay');
+  }, 'selfPreviewOverlay');
 
   // 在封面上标注「预览」，并区分这不是真正在开启的礼物
   requestAnimationFrame(() => {
@@ -686,7 +791,8 @@ function renderItem(container, item, day, role, existingAnswer, giftId = '') {
   }
 
   if (item.type === 'scrapbook' && item.layout) {
-    const page=document.createElement('div');page.className=`adv-scrap-read paper-${item.layout.paper||'cream'}`;const h=document.createElement('h3');h.textContent=item.layout.title||'冬日手账';const p=document.createElement('p');p.textContent=item.layout.text||'';page.append(h,p);for(const s of item.layout.stickers||[]){const mark=document.createElement('span');mark.style.left=s.x+'%';mark.style.top=s.y+'%';mark.style.opacity=s.opacity??1;mark.style.zIndex=s.z||2;mark.style.transform=`translate(-50%,-50%) scale(${s.scale||1}) rotate(${s.rotate||0}deg)`;if(s.src){const im=document.createElement('img');im.alt='手账贴纸';Backend.resolveMediaUrl(s.src).then(src=>{if(src)im.src=src;});mark.appendChild(im);}else mark.textContent=s.char;page.appendChild(mark);}container.appendChild(page);return;
+    renderScrapbook(container, item.layout);
+    return;
   }
 
   if ((item.type === 'voice' || item.type === 'audio') && item.url) {
@@ -722,22 +828,133 @@ function renderItem(container, item, day, role, existingAnswer, giftId = '') {
   }
 }
 
-function renderPhoto(container, photo, title) {
-  const holder = document.createElement('div'); holder.className = 'adv-photo-holder';
+function buildPhotoView(photo, title, options = {}) {
+  const frame = ['polaroid', 'vintage', 'plain', 'postcard', 'stamp'].includes(photo?.front?.frame)
+    ? photo.front.frame : 'polaroid';
   const wrap = document.createElement('button');
-  wrap.type = 'button'; wrap.className = 'adv-photo3d'; wrap.setAttribute('aria-label', '翻转照片');
-  const front = document.createElement('span'); front.className = `adv-photo-face adv-photo-front frame-${photo?.front?.frame||'polaroid'}`;
+  wrap.type = 'button'; wrap.className = 'adv-photo3d';
+  wrap.setAttribute('aria-label', options.label || '翻转照片');
+  const front = document.createElement('span'); front.className = `adv-photo-face adv-photo-front frame-${frame}`;
   const back = document.createElement('span'); back.className = 'adv-photo-face adv-photo-back';
   const img = document.createElement('img'); img.alt = title; img.loading = 'lazy';
-  img.style.objectFit=photo?.front?.fit||'cover';img.style.objectPosition=`${photo?.front?.positionX??50}% ${photo?.front?.positionY??50}%`;
+  img.style.objectFit = ['cover', 'contain'].includes(photo?.front?.fit) ? photo.front.fit : 'cover';
+  img.style.objectPosition = `${photo?.front?.positionX ?? 50}% ${photo?.front?.positionY ?? 50}%`;
   const url = photo?.front?.url || photo?.url;
-  if (url) Backend.resolveMediaUrl(url).then(src => { if (src) img.src = src; });
-  front.append(img, Object.assign(document.createElement('small'), { textContent: photo?.front?.title || title }));
-  back.textContent = photo?.back?.text || '背面还没有留言';
-  wrap.append(front, back); wrap.onclick = () => wrap.classList.toggle('flipped'); holder.appendChild(wrap);
+  const setSource = src => { if (src) img.src = src; };
+  if (options.src) setSource(options.src);
+  else if (url) Backend.resolveMediaUrl(url).then(setSource).catch(() => {});
+  const caption = document.createElement('small'); caption.textContent = photo?.front?.title || title;
+  front.append(img, caption);
+  const date = document.createElement('span'); date.className = 'adv-photo-date'; date.textContent = photo?.back?.date || '';
+  const backText = document.createElement('span'); backText.textContent = photo?.back?.text || '背面还没有留言';
+  const signature = document.createElement('span'); signature.className = 'adv-photo-signature'; signature.textContent = photo?.back?.signature || '';
+  back.append(date, backText, signature);
+  wrap.append(front, back);
+  wrap.onclick = () => wrap.classList.toggle('flipped');
+  return wrap;
+}
+
+async function downloadCanvasPng(canvas, filename) {
+  const blob = await new Promise((resolve, reject) => canvas.toBlob(value => value ? resolve(value) : reject(new Error('PNG 编码失败')), 'image/png'));
+  const url = URL.createObjectURL(blob), link = document.createElement('a'); link.href = url; link.download = filename; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+async function exportPhotoSide(photo, title, side) {
+  const stage = document.createElement('div'); stage.className = 'adv-photo-export-stage';
+  const view = buildPhotoView(photo, title); stage.appendChild(view); document.body.appendChild(stage);
+  try {
+    const fontResults = await Promise.allSettled([
+      document.fonts.load(`16px "Pinyon Script"`, title || ''),
+      document.fonts.load('16px "Noto Serif SC"', title || ''),
+    ]);
+    await document.fonts.ready;
+    if (fontResults.some(result => result.status === 'rejected')) throw new Error('字体加载失败，未导出不完整的照片');
+    const face = view.querySelector(side === 'back' ? '.adv-photo-back' : '.adv-photo-front');
+    const img = face.querySelector('img'); img.loading = 'eager';
+    const src = await Backend.resolveMediaUrl(photo?.front?.url || photo?.url);
+    if (!src) throw new Error('照片不存在或链接不受支持');
+    const loaded = await loadCanvasImage(src);
+    const faceRect = face.getBoundingClientRect();
+    const scale = 4, padding = 12 * scale;
+    const output = document.createElement('canvas');
+    output.width = Math.ceil(faceRect.width * scale + padding * 2);
+    output.height = Math.ceil(faceRect.height * scale + padding * 2);
+    const ctx = output.getContext('2d');
+    const x0 = padding, y0 = padding, width = faceRect.width * scale, height = faceRect.height * scale;
+    ctx.save(); ctx.shadowColor = 'rgba(60,30,10,.24)'; ctx.shadowBlur = 10 * scale; ctx.shadowOffsetY = 4 * scale;
+    ctx.fillStyle = side === 'back' ? '#f8efd9' : '#fffaf0'; ctx.fillRect(x0, y0, width, height); ctx.restore();
+    if (side === 'front') {
+      const style = getComputedStyle(face), frame = photo?.front?.frame || 'polaroid';
+      ctx.fillStyle = frame === 'postcard' ? '#efe4cb' : frame === 'vintage' ? '#e9dcc3' : style.backgroundColor;
+      ctx.fillRect(x0, y0, width, height);
+      const borders = ['Top','Right','Bottom','Left'].map(name => parseFloat(style[`border${name}Width`]) * scale);
+      const borderColor = style.borderTopColor;
+      if (frame !== 'stamp') {
+        ctx.fillStyle = borderColor;
+        ctx.fillRect(x0,y0,width,borders[0]); ctx.fillRect(x0+width-borders[1],y0,borders[1],height);
+        ctx.fillRect(x0,y0+height-borders[2],width,borders[2]); ctx.fillRect(x0,y0,borders[3],height);
+      } else {
+        ctx.save(); ctx.strokeStyle = borderColor; ctx.lineWidth = 6 * scale; ctx.lineCap = 'round'; ctx.setLineDash([.1 * scale, 5 * scale]);
+        ctx.strokeRect(x0+borders[3]/2,y0+borders[0]/2,width-borders[3],height-borders[0]); ctx.restore();
+      }
+      if (frame === 'postcard') {
+        ctx.fillStyle = 'rgba(166,77,77,.14)'; ctx.fillRect(x0+width*.72,y0,width*.01,height);
+      }
+      if (frame === 'stamp') {
+        ctx.strokeStyle = '#cbb993'; ctx.lineWidth = scale; ctx.setLineDash([2*scale,3*scale]);
+        ctx.strokeRect(x0+borders[3]/2,y0+borders[0]/2,width-borders[3],height-borders[0]);
+        ctx.setLineDash([]);
+      }
+      if (frame === 'vintage') {
+        ctx.strokeStyle = '#c7ae83'; ctx.lineWidth = scale;
+        ctx.strokeRect(x0+borders[3]+3*scale,y0+borders[0]+3*scale,width-borders[3]*2-6*scale,height-borders[0]*2-6*scale);
+      }
+      const imageRect = img.getBoundingClientRect();
+      const boxX = x0 + (imageRect.left-faceRect.left)*scale, boxY = y0 + (imageRect.top-faceRect.top)*scale;
+      const boxW = imageRect.width*scale, boxH = imageRect.height*scale;
+      ctx.save(); ctx.beginPath(); ctx.rect(boxX,boxY,boxW,boxH); ctx.clip();
+      ctx.fillStyle = '#e6d8bd'; ctx.fillRect(boxX,boxY,boxW,boxH);
+      const fit = img.style.objectFit || 'cover';
+      const ratio = fit === 'contain' ? Math.min(boxW/loaded.naturalWidth,boxH/loaded.naturalHeight) : Math.max(boxW/loaded.naturalWidth,boxH/loaded.naturalHeight);
+      const drawW = loaded.naturalWidth*ratio, drawH = loaded.naturalHeight*ratio;
+      const position = (img.style.objectPosition || '50% 50%').split(' ');
+      const px = parseFloat(position[0])/100 || 0, py = parseFloat(position[1])/100 || 0;
+      if (frame === 'vintage') ctx.filter = 'sepia(.22) contrast(.94)';
+      ctx.drawImage(loaded,boxX+(boxW-drawW)*px,boxY+(boxH-drawH)*py,drawW,drawH);
+      ctx.restore();
+      const caption = face.querySelector('small');
+      if (caption) {
+        const capRect = caption.getBoundingClientRect(), capStyle = getComputedStyle(caption);
+        ctx.save(); ctx.beginPath(); ctx.rect(x0+(capRect.left-faceRect.left)*scale,y0+(capRect.top-faceRect.top)*scale,capRect.width*scale,capRect.height*scale); ctx.clip();
+        const fontSize = parseFloat(capStyle.fontSize)*scale;
+        ctx.font = `${capStyle.fontStyle} ${capStyle.fontWeight} ${fontSize}px ${capStyle.fontFamily}`; ctx.fillStyle = capStyle.color; ctx.textBaseline='middle';
+        const capX=x0+(capRect.left-faceRect.left)*scale, capY=y0+(capRect.top-faceRect.top+capRect.height/2)*scale;
+        ctx.textAlign = capStyle.textAlign === 'right' ? 'right' : capStyle.textAlign === 'center' ? 'center' : 'left';
+        ctx.fillText(caption.textContent,ctx.textAlign==='center'?capX+capRect.width*scale/2:ctx.textAlign==='right'?capX+capRect.width*scale:capX,capY,capRect.width*scale);
+        ctx.restore();
+      }
+      if (frame === 'postcard') {
+        ctx.strokeStyle='#a37a48'; ctx.lineWidth=scale; ctx.setLineDash([2*scale,2*scale]);
+        ctx.strokeRect(x0+width-31*scale,y0+3*scale,25*scale,10*scale); ctx.setLineDash([]);
+        ctx.fillStyle='#8a6526'; ctx.font=`${6*scale}px ${getComputedStyle(document.body).fontFamily}`; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('✦ POST ✦',x0+width-18.5*scale,y0+8*scale);
+      }
+    } else {
+      for (const element of face.querySelectorAll('.adv-photo-date,.adv-photo-back>span:not(.adv-photo-date):not(.adv-photo-signature),.adv-photo-signature')) {
+        const rect = element.getBoundingClientRect();
+        drawScrapbookText(ctx, element, { left:faceRect.left-padding/scale, top:faceRect.top-padding/scale }, scale, scale);
+      }
+    }
+    await downloadCanvasPng(output, `photo-${side}-4x.png`);
+  } finally { stage.remove(); }
+}
+
+function renderPhoto(container, photo, title) {
+  const holder = document.createElement('div'); holder.className = 'adv-photo-holder';
+  holder.appendChild(buildPhotoView(photo, title));
   const controls=document.createElement('div');controls.className='adv-photo-export';
-  const frontBtn=document.createElement('button');frontBtn.className='adv-btn';frontBtn.textContent='导出正面';frontBtn.onclick=async()=>{const src=await Backend.resolveMediaUrl(url);if(src){const a=document.createElement('a');a.href=src;a.target='_blank';a.rel='noopener';a.download='photo-front';a.click();}};
-  const backBtn=document.createElement('button');backBtn.className='adv-btn';backBtn.textContent='导出背面';backBtn.onclick=()=>{const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900"><rect width="100%" height="100%" fill="#f8efd9"/><rect x="45" y="45" width="1110" height="810" fill="none" stroke="#9a6b35" stroke-width="3"/><text x="90" y="130" font-size="38" fill="#6b4423">${esc(photo?.back?.date||'')}</text><foreignObject x="90" y="180" width="1020" height="570"><div xmlns="http://www.w3.org/1999/xhtml" style="font:34px serif;color:#6b4423;white-space:pre-wrap;line-height:1.8">${esc(photo?.back?.text||'背面还没有留言')}</div></foreignObject><text x="900" y="800" font-size="38" fill="#6b4423">${esc(photo?.back?.signature||'')}</text></svg>`;const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'}));a.download='photo-back.svg';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
+  const frontBtn=document.createElement('button');frontBtn.className='adv-btn';frontBtn.textContent='导出正面 PNG';frontBtn.onclick=async()=>{try{await exportPhotoSide(photo,title,'front');}catch(error){toast(error.message,5000);}};
+  const backBtn=document.createElement('button');backBtn.className='adv-btn';backBtn.textContent='导出背面 PNG';backBtn.onclick=async()=>{try{await exportPhotoSide(photo,title,'back');}catch(error){toast(error.message,5000);}};
   controls.append(frontBtn,backBtn);holder.appendChild(controls);container.appendChild(holder);
 }
 
@@ -828,8 +1045,8 @@ function openRecordPlayer() {
   const {body}=openDeskSheet('圣诞唱片机','music for us');const player=document.getElementById('deskAudio');
   const controls=document.createElement('div');controls.className='adv-record-player';controls.innerHTML='<div class="adv-record-disc">♫</div><button class="adv-btn" type="button">播放 / 暂停</button><label>音量 <input type="range" min="0" max="1" step="0.05"></label><div class="adv-record-list"></div>';
   const play=controls.querySelector('button'),volume=controls.querySelector('input'),list=controls.querySelector('.adv-record-list');const savedVolume=Number(localStorage.getItem('advent-v4-volume'));if(Number.isFinite(savedVolume))player.volume=Math.max(0,Math.min(1,savedVolume));volume.value=player.volume;play.onclick=()=>player.src?(player.paused?player.play().catch(()=>toast('请再次点击播放')):player.pause()):toast('先从下面选择一段音频');volume.oninput=()=>{player.volume=+volume.value;localStorage.setItem('advent-v4-volume',volume.value);};
-  const tracks=[];for(const c of board?.cells||[]){if(!Object.keys(c.opened_by||{}).length)continue;const entries=[c.gifts?.ai,...(c.gifts?.human_entries||[])].filter(Boolean);for(const e of entries)for(const it of e.items_v2||e.items||[])if(['audio','voice'].includes(it.type)&&it.url)tracks.push({day:c.day,name:it.name||`12月${c.day}日的声音`,url:it.url});}
-  if(!tracks.length){const p=document.createElement('p');p.className='adv-hint';p.textContent='已开启的礼物里还没有可直接播放的音频。Spotify/网易云仍从礼物中的播放器打开。';list.appendChild(p);}tracks.forEach(t=>{const b=document.createElement('button');b.type='button';b.className='adv-post-item';b.textContent=t.name;b.onclick=async()=>{const src=await Backend.resolveMediaUrl(t.url);if(src){player.src=src;player.dataset.track=t.name;player.play().catch(()=>toast('Safari 需要再次点击播放'));controls.querySelector('.adv-record-disc').classList.add('playing');}};list.appendChild(b);});player.onplay=()=>controls.querySelector('.adv-record-disc')?.classList.add('playing');player.onpause=()=>controls.querySelector('.adv-record-disc')?.classList.remove('playing');if(!player.paused)controls.querySelector('.adv-record-disc').classList.add('playing');body.appendChild(controls);
+  const tracks=board?.public_tracks||[];
+  if(!tracks.length){const p=document.createElement('p');p.className='adv-hint';p.textContent='已开启的礼物里还没有可直接播放的音频。Spotify/网易云仍从礼物中的播放器打开。';list.appendChild(p);}tracks.forEach(t=>{const b=document.createElement('button');b.type='button';b.className='adv-post-item';b.textContent=t.name;b.onclick=async()=>{const src=await Backend.resolveMediaUrl(t.url);if(src){player.src=src;player.dataset.track=t.name;board._playingTrack=t;document.getElementById('deskTrackName').textContent=t.name;player.play().catch(()=>toast('Safari 需要再次点击播放'));controls.querySelector('.adv-record-disc').classList.add('playing');}};list.appendChild(b);});player.onplay=()=>controls.querySelector('.adv-record-disc')?.classList.add('playing');player.onpause=()=>controls.querySelector('.adv-record-disc')?.classList.remove('playing');if(!player.paused)controls.querySelector('.adv-record-disc').classList.add('playing');body.appendChild(controls);
 }
 
 function openReplyComposer(id, day) {
@@ -844,24 +1061,251 @@ function openReplyComposer(id, day) {
   frame.append(ta, row); row.append(close, save); overlay.appendChild(sheet); overlay.onclick = e => { if (e.target === overlay) closeMainOverlay(); };
 }
 
+function buildScrapbookContent(layout) {
+  const content = document.createElement('div'); content.className = 'adv-scrap-content';
+  const border = document.createElement('span'); border.className = 'adv-scrap-border'; content.appendChild(border);
+  const tape = document.createElement('span'); tape.className = `adv-scrap-tape tape-${layout.tape || 'paper'}`; content.appendChild(tape);
+  const title = document.createElement('h3'); title.className = 'adv-scrap-title'; title.textContent = layout.title || '冬日手账'; content.appendChild(title);
+  const text = document.createElement('p'); text.className = 'adv-scrap-text'; text.textContent = layout.text || ''; text.style.textAlign = ['left','center','right'].includes(layout.align) ? layout.align : 'left'; content.appendChild(text);
+  const seal = document.createElement('span'); seal.className = `adv-scrap-seal seal-${layout.wax || 'wine'}`; seal.textContent = '✦'; content.appendChild(seal);
+  return content;
+}
+
+function fitScrapbookPage(page) {
+  const title = page.querySelector('.adv-scrap-title');
+  const text = page.querySelector('.adv-scrap-text');
+  if (!title || !text) return page.getBoundingClientRect().height;
+  const width = page.getBoundingClientRect().width;
+  if (!width) return width * 4 / 3;
+  text.style.top = `${title.offsetTop + title.offsetHeight + width * .045}px`;
+  const needed = text.offsetTop + text.offsetHeight + width * .09;
+  const height = Math.max(width * 4 / 3, Math.ceil(needed));
+  page.style.height = `${height}px`;
+  page.style.aspectRatio = 'auto';
+  return height;
+}
+
+function renderScrapbook(container, layout) {
+  const page = document.createElement('div'); page.className = `adv-scrap-read paper-${layout.paper || 'cream'}`;
+  page.appendChild(buildScrapbookContent(layout));
+  for (const s of layout.stickers || []) {
+    const mark = document.createElement('span'); mark.className = 'adv-sticker adv-sticker-static';
+    mark.style.left = `${s.x}%`; mark.style.top = `${s.y}%`; mark.style.opacity = s.opacity ?? 1; mark.style.zIndex = s.z ?? 2;
+    mark.style.transform = `translate(-50%,-50%) scale(${s.scale || 1}) rotate(${s.rotate || 0}deg)`;
+    if (s.src) {
+      const img = document.createElement('img'); img.alt = s.name || '手账贴纸';
+      Backend.resolveMediaUrl(s.src).then(src => { if (src) img.src = src; }).catch(() => {});
+      mark.appendChild(img);
+    } else mark.textContent = s.char;
+    page.appendChild(mark);
+  }
+  container.appendChild(page);
+  fitScrapbookPage(page);
+  if (document.fonts) document.fonts.ready.then(() => { if (page.isConnected) fitScrapbookPage(page); });
+  return page;
+}
+
+function loadCanvasImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    if (/^https?:/i.test(src)) img.crossOrigin = 'anonymous';
+    img.decoding = 'async';
+    const timer = setTimeout(() => reject(new Error('图片解码超时')), 15000);
+    img.onload = async () => {
+      clearTimeout(timer);
+      try { if (img.decode) await img.decode(); resolve(img); } catch (error) { reject(error); }
+    };
+    img.onerror = () => { clearTimeout(timer); reject(new Error('图片载入失败')); };
+    img.src = src;
+  });
+}
+
+function domTextLines(element) {
+  const lines = [];
+  let current = null;
+  const flush = () => {
+    if (current) lines.push(current);
+    current = null;
+  };
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    const chars = Array.from(node.nodeValue || '');
+    for (let i = 0; i < chars.length; i++) {
+      const char = chars[i];
+      if (char === '\n') { flush(); lines.push({ text: '', top: 0 }); continue; }
+      const range = document.createRange();
+      range.setStart(node, i); range.setEnd(node, i + 1);
+      const rect = range.getBoundingClientRect();
+      const top = rect.top;
+      if (!current || (current.text && Math.abs(current.top - top) > 1)) flush();
+      if (!current) current = { text: '', top };
+      current.text += char;
+    }
+    flush();
+  }
+  if (!lines.length && current) lines.push(current);
+  return lines.filter((line, index) => line.text || index < lines.length - 1);
+}
+
+function drawScrapbookText(ctx, element, pageRect, scaleX, scaleY) {
+  const style = getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+  const fontSize = parseFloat(style.fontSize) * scaleX;
+  const lineHeight = (parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.5) * scaleY;
+  ctx.save();
+  ctx.font = `${style.fontStyle} ${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
+  ctx.fillStyle = style.color; ctx.textBaseline = 'alphabetic'; ctx.textAlign = style.textAlign || 'left';
+  const x = (rect.left - pageRect.left) * scaleX;
+  const width = rect.width * scaleX;
+  const lines = domTextLines(element);
+  lines.forEach((line) => {
+    const text = line.text.trimEnd();
+    if (!text) return;
+    const lineX = ctx.textAlign === 'center' ? x + width / 2 : ctx.textAlign === 'right' ? x + width : x;
+    const metrics = ctx.measureText(text);
+    const ascent = metrics.actualBoundingBoxAscent || fontSize * .8;
+    const descent = metrics.actualBoundingBoxDescent || fontSize * .2;
+    const y = (line.top - pageRect.top) * scaleY;
+    const baseline = y + (lineHeight - ascent - descent) / 2 + ascent;
+    ctx.fillText(text, lineX, baseline);
+  });
+  ctx.restore();
+}
+
+async function exportScrapbookPng(canvas, scale) {
+  if (!canvas) throw new Error('手账画布尚未准备好');
+  const status = document.getElementById('scrapExportStatus');
+  const button = document.getElementById('scrapExport');
+  button.disabled = true;
+  if (status) status.textContent = '正在加载字体与贴纸图片…';
+  try {
+    const titleText = canvas.querySelector('.adv-scrap-title')?.textContent || '';
+    const bodyText = canvas.querySelector('.adv-scrap-text')?.textContent || '';
+    const fontResults = await Promise.allSettled([
+      document.fonts.load(`16px "Pinyon Script"`, titleText),
+      document.fonts.load(`16px "Noto Serif SC"`, bodyText),
+      document.fonts.load('16px "IM Fell English"'),
+    ]);
+    await document.fonts.ready;
+    if (fontResults.some(result => result.status === 'rejected')) throw new Error('字体加载失败，未导出不完整的页面；请检查字体来源与跨域设置');
+    fitScrapbookPage(canvas);
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) throw new Error('画布尺寸无效');
+    const width = Math.round(1200 * scale);
+    const height = Math.round(width * rect.height / rect.width);
+    if (width > 4096 || height > 8192 || width * height > 12000000) throw new Error('导出尺寸超过安全内存上限，请改用 1× 或缩短正文');
+    const output = document.createElement('canvas'); output.width = width; output.height = height;
+    const ctx = output.getContext('2d');
+    if (!ctx) throw new Error('浏览器无法创建 Canvas');
+    const scaleX = width / rect.width, scaleY = height / rect.height;
+    const paper = canvas.dataset.paper || 'cream';
+    const paperColors = { cream:'#fffaf0', kraft:'#cfae78', grid:'#fffaf0', snow:'#edf3f4', botanical:'#fffaf0', blank:'#ffffff' };
+    ctx.fillStyle = paperColors[paper] || paperColors.cream; ctx.fillRect(0, 0, width, height);
+    if (paper === 'cream') {
+      ctx.strokeStyle = 'rgba(107,68,35,.11)'; ctx.lineWidth = Math.max(1, scaleX);
+      for (let y = 28 * scaleY; y < height; y += 28 * scaleY) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(width,y); ctx.stroke(); }
+    } else if (paper === 'grid') {
+      ctx.strokeStyle = 'rgba(98,128,150,.15)'; ctx.lineWidth = Math.max(1, scaleX);
+      for (let x = 0; x < width; x += 24 * scaleX) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,height); ctx.stroke(); }
+      for (let y = 0; y < height; y += 24 * scaleY) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(width,y); ctx.stroke(); }
+    } else if (paper === 'snow') {
+      ctx.fillStyle = '#ffffff';
+      for (let y = 8 * scaleY; y < height; y += 32 * scaleY) for (let x = 8 * scaleX; x < width; x += 32 * scaleX) { ctx.beginPath(); ctx.arc(x,y,2*scaleX,0,Math.PI*2); ctx.fill(); }
+    }
+    const titleEl = canvas.querySelector('.adv-scrap-title');
+    const textEl = canvas.querySelector('.adv-scrap-text');
+    if (titleEl) drawScrapbookText(ctx, titleEl, rect, scaleX, scaleY);
+    if (textEl) drawScrapbookText(ctx, textEl, rect, scaleX, scaleY);
+    const tape = canvas.querySelector('.adv-scrap-tape');
+    if (tape) {
+      const tapeRect = tape.getBoundingClientRect();
+      ctx.save(); ctx.translate((tapeRect.left-rect.left+tapeRect.width/2)*scaleX,(tapeRect.top-rect.top+tapeRect.height/2)*scaleY); ctx.rotate(-3*Math.PI/180);
+      ctx.globalAlpha = tape.classList.contains('tape-transparent') ? .45 : .78;
+      ctx.fillStyle = tape.classList.contains('tape-holly') ? '#49633c' : '#d8c397'; ctx.fillRect(-tapeRect.width*scaleX/2,-tapeRect.height*scaleY/2,tapeRect.width*scaleX,tapeRect.height*scaleY); ctx.restore();
+    }
+    const seal = canvas.querySelector('.adv-scrap-seal');
+    if (seal) {
+      const sealRect = seal.getBoundingClientRect(), sealStyle = getComputedStyle(seal);
+      ctx.save(); ctx.fillStyle = sealStyle.backgroundColor; ctx.beginPath(); ctx.arc((sealRect.left-rect.left+sealRect.width/2)*scaleX,(sealRect.top-rect.top+sealRect.height/2)*scaleY,sealRect.width*scaleX/2,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = sealStyle.color; ctx.font = `${sealRect.width*.42*scaleX}px ${getComputedStyle(document.body).fontFamily}`; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText('✦',(sealRect.left-rect.left+sealRect.width/2)*scaleX,(sealRect.top-rect.top+sealRect.height/2)*scaleY); ctx.restore();
+    }
+    const border = canvas.querySelector('.adv-scrap-border');
+    if (border) {
+      const borderRect = border.getBoundingClientRect();
+      ctx.strokeStyle = '#9a6b35'; ctx.lineWidth = Math.max(1, scaleX); ctx.strokeRect((borderRect.left-rect.left)*scaleX,(borderRect.top-rect.top)*scaleY,borderRect.width*scaleX,borderRect.height*scaleY);
+    }
+    if (paper === 'botanical') {
+      const colors = ['#49633c','#a33b3b','#d5b56a']; const band = 12 * scaleX;
+      for (let i = 0; i < Math.ceil((width+height)/(15*scaleX)); i++) {
+        ctx.strokeStyle = colors[i%3]; ctx.lineWidth = 5*scaleX; const p=i*15*scaleX;
+        ctx.beginPath(); ctx.moveTo(p,0); ctx.lineTo(0,p); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(width-p,height); ctx.lineTo(width,height-p); ctx.stroke();
+      }
+    }
+    const stickers = [...canvas.querySelectorAll(':scope > .adv-sticker')].sort((a,b) => (+a.style.zIndex || 0)-(+b.style.zIndex || 0));
+    const failures = [];
+    for (const mark of stickers) {
+      const src = mark.dataset.src;
+      const x = (parseFloat(mark.style.left)/100) * width;
+      const y = (parseFloat(mark.style.top)/100) * height;
+      const size = width * .13;
+      ctx.save(); ctx.translate(x,y); ctx.rotate((+mark.dataset.rotate||0)*Math.PI/180); ctx.scale(+mark.dataset.scale||1,+mark.dataset.scale||1);
+      const opacity = Number(mark.dataset.opacity ?? 1);
+      ctx.globalAlpha = Number.isFinite(opacity) ? Math.max(0,Math.min(1,opacity)) : 1;
+      if (src) {
+        try {
+          const resolved = await Backend.resolveMediaUrl(src);
+          if (!resolved) throw new Error('本地图片不存在或链接不受支持');
+          const img = await loadCanvasImage(resolved);
+          const ratio = Math.min(size/img.naturalWidth,size/img.naturalHeight);
+          const drawW=img.naturalWidth*ratio, drawH=img.naturalHeight*ratio;
+          ctx.drawImage(img,-drawW/2,-drawH/2,drawW,drawH);
+        } catch (error) { failures.push(`${mark.dataset.name || '贴纸'}：${error.message}`); }
+      } else {
+        ctx.font = `${size}px ${getComputedStyle(mark).fontFamily}`; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillStyle='#3a2f28'; ctx.fillText(mark.dataset.char||'',0,0);
+      }
+      ctx.restore();
+    }
+    if (failures.length) throw new Error(`导出取消，以下贴纸未能载入：${failures.join('；')}`);
+    const blob = await new Promise((resolve,reject) => output.toBlob(value => value ? resolve(value) : reject(new Error('PNG 编码失败或图片跨域污染')), 'image/png'));
+    const url = URL.createObjectURL(blob), link = document.createElement('a'); link.href=url; link.download=`christmas-scrapbook-${scale}x.png`; link.click(); setTimeout(()=>URL.revokeObjectURL(url),2000);
+    if (status) status.textContent = `PNG 已导出 · ${width} × ${height}`;
+  } finally { button.disabled = false; }
+}
+
 function openScrapbook() {
   const overlay = document.getElementById('overlay'); overlay.innerHTML = ''; overlay.style.display = 'flex'; overlay.classList.add('on');
   const sheet = document.createElement('div'); sheet.className = 'adv-sheet adv-paper';
-  sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">手账抽屉</span><span class="by">scrapbook</span></div><div class="adv-scrap-body"><div class="adv-scrap-main"><p class="adv-editor-intro">拖动贴纸，留下今天的页面。草稿只保存在当前浏览器。</p><label class="adv-lab">礼物日期</label><input class="adv-in1" id="scrapDay" type="number" min="1" max="25" value="1"><label class="adv-lab">信纸标题</label><input class="adv-in1" id="scrapTitle" placeholder="十二月的某一天"><label class="adv-lab">正文</label><textarea class="adv-ta" id="scrapText" placeholder="写一点冬天的事…"></textarea><div class="adv-sticker-tray"><button type="button" data-sticker="★">★</button><button type="button" data-sticker="❄">❄</button><button type="button" data-sticker="♡">♡</button><button type="button" data-sticker="🍪">🍪</button><label class="adv-sticker-upload">＋ PNG<input id="stickerUpload" type="file" accept="image/png,image/webp" hidden></label></div></div><div class="adv-scrap-side"><button type="button" class="adv-stklib-toggle" id="stklibToggle" aria-expanded="true">🎀 贴纸收纳册 <small>分类 · 搜索 · 配色 · 收藏</small></button><div class="adv-stklib-host" id="stklibHost"></div></div><div class="adv-scrap-stage"><div class="adv-sticker-tools"><button type="button" data-action="smaller">−</button><button type="button" data-action="larger">＋</button><button type="button" data-action="rotate">↻</button><button type="button" data-action="fade">◐</button><button type="button" data-action="back">↓</button><button type="button" data-action="front">↑</button><button type="button" data-action="copy">复制</button><button type="button" data-action="delete">删除</button><button type="button" data-action="undo">撤销</button><button type="button" data-action="redo">重做</button></div><div class="adv-scrap-canvas" id="scrapCanvas"></div><div class="adv-row"><button class="adv-btn" id="scrapExport">导出图片</button><button class="adv-btn" id="scrapClose">关上</button><button class="adv-btn" id="scrapSave">保存草稿</button><button class="adv-btn solid" id="scrapPublish">封成礼物</button></div></div></div></div>';
+  sheet.innerHTML = '<div class="adv-frame"><div class="adv-ctop"><span class="d">手账抽屉</span><span class="by">scrapbook</span></div><div class="adv-scrap-body"><div class="adv-scrap-main"><p class="adv-editor-intro">拖动贴纸，留下今天的页面。草稿只保存在当前浏览器。</p><label class="adv-lab">礼物日期</label><input class="adv-in1" id="scrapDay" type="number" min="1" max="25" value="1"><label class="adv-lab">信纸标题</label><input class="adv-in1" id="scrapTitle" placeholder="十二月的某一天"><label class="adv-lab">正文</label><textarea class="adv-ta" id="scrapText" placeholder="写一点冬天的事…"></textarea><div class="adv-sticker-tray"><button type="button" data-sticker="★">★</button><button type="button" data-sticker="❄">❄</button><button type="button" data-sticker="♡">♡</button><button type="button" data-sticker="🍪">🍪</button><label class="adv-sticker-upload">＋ PNG<input id="stickerUpload" type="file" accept="image/png,image/webp" hidden></label></div></div><div class="adv-scrap-side"><button type="button" class="adv-stklib-toggle" id="stklibToggle" aria-expanded="true">🎀 贴纸收纳册 <small>分类 · 搜索 · 配色 · 收藏</small></button><div class="adv-stklib-host" id="stklibHost"></div></div><div class="adv-scrap-stage"><div class="adv-sticker-tools"><button type="button" data-action="smaller">−</button><button type="button" data-action="larger">＋</button><button type="button" data-action="rotate">↻</button><button type="button" data-action="fade">◐</button><button type="button" data-action="back">↓</button><button type="button" data-action="front">↑</button><button type="button" data-action="copy">复制</button><button type="button" data-action="delete">删除</button><button type="button" data-action="undo">撤销</button><button type="button" data-action="redo">重做</button></div><div class="adv-scrap-canvas" id="scrapCanvas"></div><div class="adv-row adv-scrap-actions"><button class="adv-btn" id="scrapExport">导出 PNG</button><select id="scrapExportScale" aria-label="导出倍数"><option value="1">1× 标准</option><option value="2">2× 高清</option></select><span id="scrapExportStatus" class="adv-hint" role="status"></span><button class="adv-btn" id="scrapClose">关上</button><button class="adv-btn" id="scrapSave">保存草稿</button><button class="adv-btn solid" id="scrapPublish">封成礼物</button></div></div></div></div>';
   overlay.appendChild(sheet);
   const title = sheet.querySelector('#scrapTitle'), text = sheet.querySelector('#scrapText'), canvas = sheet.querySelector('#scrapCanvas');
-  const tray=sheet.querySelector('.adv-sticker-tray');tray.insertAdjacentHTML('beforebegin','<div class="adv-scrap-materials"><label>信纸<select id="scrapPaper"><option value="cream">奶油复古</option><option value="kraft">牛皮纸</option><option value="grid">格纹纸</option><option value="snow">雪花信纸</option><option value="botanical">圣诞植物边框</option><option value="blank">简洁空白</option></select></label><label>火漆<select id="scrapWax"><option value="wine">酒红</option><option value="gold">柔金</option><option value="green">松绿</option></select></label><label>胶带<select id="scrapTape"><option value="paper">牛皮纸胶带</option><option value="transparent">半透明胶带</option><option value="holly">冬青胶带</option></select></label></div>');
-  const paper=sheet.querySelector('#scrapPaper'),wax=sheet.querySelector('#scrapWax'),tape=sheet.querySelector('#scrapTape');paper.onchange=()=>{canvas.dataset.paper=paper.value;};
+  const tray=sheet.querySelector('.adv-sticker-tray');tray.insertAdjacentHTML('beforebegin','<div class="adv-scrap-materials"><label>信纸<select id="scrapPaper"><option value="cream">奶油复古</option><option value="kraft">牛皮纸</option><option value="grid">格纹纸</option><option value="snow">雪花信纸</option><option value="botanical">圣诞植物边框</option><option value="blank">简洁空白</option></select></label><label>火漆<select id="scrapWax"><option value="wine">酒红</option><option value="gold">柔金</option><option value="green">松绿</option></select></label><label>胶带<select id="scrapTape"><option value="paper">牛皮纸胶带</option><option value="transparent">半透明胶带</option><option value="holly">冬青胶带</option></select></label><label>正文对齐<select id="scrapAlign"><option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option></select></label></div>');
+  const paper=sheet.querySelector('#scrapPaper'),wax=sheet.querySelector('#scrapWax'),tape=sheet.querySelector('#scrapTape'),align=sheet.querySelector('#scrapAlign');
+  let scrapContent = null;
+  const currentLayout = () => ({ title:title.value.slice(0,200), text:text.value.slice(0,6000), paper:paper.value, wax:wax.value, tape:tape.value, align:align.value, stickers:snapshot() });
+  function syncScrapbookCanvas() {
+    canvas.dataset.paper = paper.value;
+    scrapContent?.remove();
+    scrapContent = buildScrapbookContent(currentLayout());
+    canvas.prepend(scrapContent);
+    fitScrapbookPage(canvas);
+    if (document.fonts) document.fonts.ready.then(() => { if (canvas.isConnected) fitScrapbookPage(canvas); });
+  }
+  [paper,wax,tape,align].forEach(select => select.addEventListener('change', syncScrapbookCanvas));
+  title.addEventListener('input', syncScrapbookCanvas); text.addEventListener('input', syncScrapbookCanvas);
   let selected = null, history = [], future = [], stklib = null;
   /* 贴纸快照保留图案元数据，便于重新打开后替换/识别；src 始终是渲染用的 raw URL */
-  const snapshot = () => [...canvas.children].map(b=>({char:b.dataset.char||'',src:b.dataset.src||'',x:parseFloat(b.style.left),y:parseFloat(b.style.top),scale:+(b.dataset.scale||1),rotate:+(b.dataset.rotate||0),opacity:+(b.dataset.opacity||1),z:+(b.style.zIndex||1),name:b.dataset.name||'',stickerId:b.dataset.stickerId||'',patternId:b.dataset.patternId||''}));
+  const stickerNodes = () => [...canvas.querySelectorAll(':scope > .adv-sticker')];
+  const snapshot = () => stickerNodes().map(b=>({char:b.dataset.char||'',src:b.dataset.src||'',x:parseFloat(b.style.left),y:parseFloat(b.style.top),scale:+(b.dataset.scale??1),rotate:+(b.dataset.rotate??0),opacity:+(b.dataset.opacity??1),z:+(b.style.zIndex??1),name:b.dataset.name||'',stickerId:b.dataset.stickerId||'',patternId:b.dataset.patternId||''}));
   const remember = () => { history.push(snapshot()); if (history.length > 40) history.shift(); future = []; };
-  const restore = list => { canvas.innerHTML=''; selected=null; (list||[]).forEach(addStickerFromData); };
-  try { const d = JSON.parse(localStorage.getItem('advent-v4-scrapbook') || 'null'); if (d) { title.value = d.title || ''; text.value = d.text || '';paper.value=d.paper||'cream';wax.value=d.wax||'wine';tape.value=d.tape||'paper';canvas.dataset.paper=paper.value;restore(d.stickers || []); } } catch {}
-  function applySticker(b) { b.style.transform=`translate(-50%,-50%) scale(${b.dataset.scale||1}) rotate(${b.dataset.rotate||0}deg)`; b.style.opacity=b.dataset.opacity||1; }
+  const restore = list => { stickerNodes().forEach(node => node.remove()); selected=null; (list||[]).forEach(addStickerFromData); };
+  try { const d = JSON.parse(localStorage.getItem('advent-v4-scrapbook') || 'null'); if (d) { title.value = d.title || ''; text.value = d.text || '';paper.value=d.paper||'cream';wax.value=d.wax||'wine';tape.value=d.tape||'paper';align.value=d.align||'left';restore(d.stickers || []); } } catch {}
+  syncScrapbookCanvas();
+  function applySticker(b) { b.style.transform=`translate(-50%,-50%) scale(${b.dataset.scale||1}) rotate(${b.dataset.rotate||0}deg)`; b.style.opacity=b.dataset.opacity??1; }
   function addStickerFromData(s) { addSticker(s.char||'',s.x??50,s.y??50,s); }
   function addSticker(char,x=50,y=50,data={}) {
-    const b=document.createElement('button');b.type='button';b.className='adv-sticker';b.dataset.char=char;b.dataset.src=data.src||'';b.dataset.scale=data.scale||1;b.dataset.rotate=data.rotate||0;b.dataset.opacity=data.opacity??1;b.dataset.name=data.name||'';b.dataset.stickerId=data.stickerId||'';b.dataset.patternId=data.patternId||'';b.style.left=x+'%';b.style.top=y+'%';b.style.zIndex=data.z||1;
+    const b=document.createElement('button');b.type='button';b.className='adv-sticker';b.dataset.char=char;b.dataset.src=data.src||'';b.dataset.scale=data.scale||1;b.dataset.rotate=data.rotate||0;b.dataset.opacity=data.opacity??1;b.dataset.name=data.name||'';b.dataset.stickerId=data.stickerId||'';b.dataset.patternId=data.patternId||'';b.style.left=x+'%';b.style.top=y+'%';b.style.zIndex=data.z??1;
     if(data.src){const img=document.createElement('img');img.alt=data.name||'贴纸';if(data.preview)img.src=data.preview;else Backend.resolveMediaUrl(data.src).then(src=>{if(src)img.src=src;});b.appendChild(img);}else b.textContent=char;applySticker(b);
     b.onclick=()=>{selected?.classList.remove('selected');selected=b;b.classList.add('selected');};
     const points=new Map();let gesture=null;
@@ -883,10 +1327,15 @@ function openScrapbook() {
   // 竖屏窄屏默认收起收纳册，避免把画布挤出首屏；横屏/桌面保持展开
   if(window.innerWidth<820){stkHost.classList.add('collapsed');stkToggle.setAttribute('aria-expanded','false');}
   stkToggle.onclick=()=>{const hidden=stkHost.classList.toggle('collapsed');stkToggle.setAttribute('aria-expanded',String(!hidden));};
-  sheet.querySelector('.adv-sticker-tools').onclick=e=>{const a=e.target.dataset.action;if(!a)return;if(a==='undo'){if(!history.length)return;future.push(snapshot());restore(history.pop());return;}if(a==='redo'){if(!future.length)return;history.push(snapshot());restore(future.pop());return;}if(!selected)return toast('先点选一枚贴纸');remember();if(a==='delete'){selected.remove();selected=null;return;}if(a==='copy'){addStickerFromData({...snapshot().find((_,i)=>canvas.children[i]===selected),x:parseFloat(selected.style.left)+4,y:parseFloat(selected.style.top)+4});return;}if(a==='smaller')selected.dataset.scale=Math.max(.3,+selected.dataset.scale-.1);if(a==='larger')selected.dataset.scale=Math.min(3,+selected.dataset.scale+.1);if(a==='rotate')selected.dataset.rotate=(+selected.dataset.rotate+15)%360;if(a==='fade')selected.dataset.opacity=Math.max(.2,+selected.dataset.opacity-.2);if(a==='back')selected.style.zIndex=Math.max(0,+selected.style.zIndex-1);if(a==='front')selected.style.zIndex=+selected.style.zIndex+1;applySticker(selected);};
-  sheet.querySelector('#scrapExport').onclick=()=>{const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));const marks=snapshot().filter(s=>!s.src).map(s=>`<text x="${s.x*12}" y="${s.y*16}" font-size="${42*s.scale}" opacity="${s.opacity}" transform="rotate(${s.rotate} ${s.x*12} ${s.y*16})">${esc(s.char)}</text>`).join('');const lines=esc(text.value).split('\n').map((l,i)=>`<text x="100" y="${260+i*42}" font-size="25" fill="#3a2f28">${l}</text>`).join('');const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600"><rect width="100%" height="100%" fill="#f5ead2"/><rect x="55" y="55" width="1090" height="1490" fill="none" stroke="#9a6b35" stroke-width="3"/><text x="100" y="160" font-size="52" fill="#7d1f22">${esc(title.value||'冬日手账')}</text>${lines}${marks}</svg>`;const blob=new Blob([svg],{type:'image/svg+xml'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='christmas-scrapbook.svg';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);};
-  sheet.querySelector('#scrapClose').onclick = closeMainOverlay; sheet.querySelector('#scrapSave').onclick = () => { localStorage.setItem('advent-v4-scrapbook', JSON.stringify({title:title.value.slice(0,200), text:text.value.slice(0,6000),paper:paper.value,wax:wax.value,tape:tape.value, stickers:snapshot()})); toast('手账草稿已保存'); closeMainOverlay(); };
-  sheet.querySelector('#scrapPublish').onclick=()=>{const day=parseInt(sheet.querySelector('#scrapDay').value,10);if(!day||day<1||day>25)return toast('日期要在 1—25 之间');const layout={title:title.value.slice(0,200),text:text.value.slice(0,6000),paper:paper.value,wax:wax.value,tape:tape.value,stickers:snapshot()};try{Backend.hide(day,[{type:'scrapbook',layout}], 'dessin');localStorage.removeItem('advent-v4-scrapbook');board=Backend.getBoard();refresh();toast(`手账已封进12月${day}日`);closeMainOverlay();}catch(e){toast(e.message);}};
+  sheet.querySelector('.adv-sticker-tools').onclick=e=>{const a=e.target.dataset.action;if(!a)return;if(a==='undo'){if(!history.length)return;future.push(snapshot());restore(history.pop());return;}if(a==='redo'){if(!future.length)return;history.push(snapshot());restore(future.pop());return;}if(!selected)return toast('先点选一枚贴纸');remember();if(a==='delete'){selected.remove();selected=null;return;}if(a==='copy'){addStickerFromData({...snapshot()[stickerNodes().indexOf(selected)],x:parseFloat(selected.style.left)+4,y:parseFloat(selected.style.top)+4});return;}if(a==='smaller')selected.dataset.scale=Math.max(.3,+selected.dataset.scale-.1);if(a==='larger')selected.dataset.scale=Math.min(3,+selected.dataset.scale+.1);if(a==='rotate')selected.dataset.rotate=(+selected.dataset.rotate+15)%360;if(a==='fade')selected.dataset.opacity=Math.max(.2,+selected.dataset.opacity-.2);if(a==='back')selected.style.zIndex=Math.max(0,+selected.style.zIndex-1);if(a==='front')selected.style.zIndex=+selected.style.zIndex+1;applySticker(selected);};
+  sheet.querySelector('#scrapExport').onclick=async()=>{
+    syncScrapbookCanvas();
+    const status=document.getElementById('scrapExportStatus');
+    try { await exportScrapbookPng(canvas, +sheet.querySelector('#scrapExportScale').value || 1); }
+    catch(error) { if(status)status.textContent=error.message; toast(error.message,5000); }
+  };
+  sheet.querySelector('#scrapClose').onclick = closeMainOverlay; sheet.querySelector('#scrapSave').onclick = () => { localStorage.setItem('advent-v4-scrapbook', JSON.stringify(currentLayout())); toast('手账草稿已保存'); closeMainOverlay(); };
+  sheet.querySelector('#scrapPublish').onclick=()=>{const day=parseInt(sheet.querySelector('#scrapDay').value,10);if(!day||day<1||day>25)return toast('日期要在 1—25 之间');const layout=currentLayout();try{Backend.hide(day,[{type:'scrapbook',layout}], 'dessin');localStorage.removeItem('advent-v4-scrapbook');board=Backend.getBoard();refresh();toast(`手账已封进12月${day}日`);closeMainOverlay();}catch(e){toast(e.message);}};
   overlay.onclick = e => { if (e.target === overlay) closeMainOverlay(); };
 }
 
@@ -927,8 +1376,10 @@ async function openEditor(defaultDay) {
   overlay.classList.add('on');
 
   const sheet = document.createElement('div');
-  sheet.className = 'adv-sheet adv-paper adv-face';
+  sheet.className = 'adv-sheet adv-paper adv-face adv-editor-sheet';
   sheet.setAttribute('role', 'dialog');
+  sheet.setAttribute('aria-modal', 'true');
+  sheet.setAttribute('aria-label', '礼物编辑器');
 
   const frame = document.createElement('div');
   frame.className = 'adv-frame';
@@ -989,14 +1440,18 @@ async function openEditor(defaultDay) {
 
   const urlPreviewBtn = document.createElement('button');
   urlPreviewBtn.textContent = '预览';
-  urlPreviewBtn.onclick = () => {
-    const parsed = window.AdventMusic?.parseMusicUrl(urlIn.value, {
-      name: nameIn.value.trim(), artist: artistIn.value.trim(), cover: coverIn.value.trim(),
-    });
-    if (!parsed) { toast('链接格式不认识，支持 Spotify track 和网易云歌曲链接'); return; }
-    urlPreview.innerHTML = '';
-    urlPreview.style.display = 'block';
-    window.AdventMusic?.renderMusicItem(urlPreview, parsed);
+  urlPreviewBtn.onclick = async () => {
+    urlPreviewBtn.disabled = true;
+    try {
+      await identifyMusic();
+      const parsed = window.AdventMusic?.parseMusicUrl(urlIn.value, {
+        name: nameIn.value.trim(), artist: artistIn.value.trim(), album: albumIn.value.trim(), cover: coverIn.value.trim(),
+      });
+      if (!parsed) { toast('链接格式不认识，支持 Spotify track 和网易云歌曲链接'); return; }
+      urlPreview.innerHTML = '';
+      urlPreview.style.display = 'block';
+      window.AdventMusic?.renderMusicItem(urlPreview, parsed);
+    } finally { urlPreviewBtn.disabled = false; }
   };
 
   urlRow.appendChild(urlIn);
@@ -1017,6 +1472,13 @@ async function openEditor(defaultDay) {
   musicMetaRow.append(nameIn, artistIn);
   frame.appendChild(musicMetaRow);
 
+  const albumIn = document.createElement('input');
+  albumIn.className = 'adv-in1';
+  albumIn.type = 'text';
+  albumIn.placeholder = '专辑（可选，留空自动识别）';
+  albumIn.style.marginTop = '6px';
+  frame.appendChild(albumIn);
+
   const coverIn = document.createElement('input');
   coverIn.className = 'adv-in1';
   coverIn.type = 'url';
@@ -1024,10 +1486,79 @@ async function openEditor(defaultDay) {
   coverIn.style.marginTop = '6px';
   frame.appendChild(coverIn);
 
+  const musicStatus = document.createElement('div');
+  musicStatus.className = 'adv-status adv-music-status';
+  musicStatus.setAttribute('role', 'status');
+  musicStatus.setAttribute('aria-live', 'polite');
+  frame.appendChild(musicStatus);
+
   const urlPreview = document.createElement('div');
   urlPreview.className = 'adv-music-preview';
   urlPreview.style.display = 'none';
   frame.appendChild(urlPreview);
+
+  const musicInputs = { name: nameIn, artist: artistIn, album: albumIn, cover: coverIn };
+  const autoMusicValues = {};
+  const manualMusicFields = new Set();
+  let musicRequestSeq = 0;
+  let musicTimer = null;
+  let lastMusicUrl = '';
+  let lastMusicResult = null;
+  let editorDirty = false;
+  let editorClosed = false;
+
+  for (const [field, input] of Object.entries(musicInputs)) {
+    input.addEventListener('input', () => {
+      manualMusicFields.add(field);
+      urlPreview.style.display = 'none';
+    });
+  }
+  function clearAutoMusic() {
+    for (const [field, input] of Object.entries(musicInputs)) {
+      if (autoMusicValues[field] && !manualMusicFields.has(field) && input.value === autoMusicValues[field]) input.value = '';
+      delete autoMusicValues[field];
+    }
+  }
+  async function identifyMusic() {
+    const raw = urlIn.value.trim();
+    const seq = ++musicRequestSeq;
+    if (!raw) { musicStatus.textContent = '粘贴 Spotify track 或网易云完整歌曲链接后会自动识别。'; return null; }
+    if (raw === lastMusicUrl && lastMusicResult) return lastMusicResult;
+    musicStatus.textContent = '正在向公开元数据源识别歌曲…';
+    const result = await window.AdventMusic?.resolveSongMetadata(raw);
+    if (seq !== musicRequestSeq || editorClosed) return null;
+    if (!result?.ok) {
+      lastMusicResult = null;
+      musicStatus.textContent = result?.message || '自动识别失败，可继续手填歌曲信息。';
+      return null;
+    }
+    const meta = result.meta || {};
+    const values = { name: meta.name, artist: meta.artist, album: meta.album, cover: meta.cover };
+    for (const [field, value] of Object.entries(values)) {
+      const input = musicInputs[field];
+      if (!value || manualMusicFields.has(field) || input.value.trim()) continue;
+      input.value = String(value);
+      autoMusicValues[field] = String(value);
+    }
+    if (meta.url && meta.url !== raw) {
+      urlIn.value = meta.url;
+      lastMusicUrl = meta.url;
+    } else lastMusicUrl = raw;
+    lastMusicResult = result;
+    musicStatus.textContent = `已识别：${nameIn.value.trim() || meta.name || '歌曲'}${artistIn.value.trim() ? ' · ' + artistIn.value.trim() : ''}。播放是否可用请在预览中确认。`;
+    persistDraft();
+    return result;
+  }
+  urlIn.addEventListener('input', () => {
+    musicRequestSeq++;
+    lastMusicUrl = ''; lastMusicResult = null;
+    clearAutoMusic();
+    musicStatus.textContent = '链接已更改，正在等待自动识别…';
+    urlPreview.style.display = 'none';
+    clearTimeout(musicTimer);
+    musicTimer = setTimeout(identifyMusic, 650);
+  });
+  urlIn.addEventListener('blur', identifyMusic);
 
   // 图片上传
   const imgLabel = document.createElement('span');
@@ -1049,24 +1580,48 @@ async function openEditor(defaultDay) {
   frame.appendChild(imgPreviewWrap);
 
   let uploadedImageUrl = null;
-  const photoOptions=document.createElement('div');photoOptions.className='adv-photo-editor-options';photoOptions.innerHTML='<label><input type="checkbox" id="asPhoto"> 作为可翻转照片</label><select id="photoFrame"><option value="polaroid">拍立得</option><option value="vintage">复古冲印</option><option value="plain">普通照片</option><option value="postcard">明信片</option><option value="stamp">邮票边框</option></select><label>横向焦点 <input id="photoX" type="range" min="0" max="100" value="50"></label><label>纵向焦点 <input id="photoY" type="range" min="0" max="100" value="50"></label><textarea id="photoBack" class="adv-ta" placeholder="照片背面的故事、日期或签名"></textarea>';
+  let previewObjectUrl = '';
+  const photoOptions=document.createElement('div');photoOptions.className='adv-photo-editor-options';photoOptions.innerHTML='<label><input type="checkbox" id="asPhoto"> 作为可翻转照片</label><label>相纸边框<select id="photoFrame"><option value="polaroid">拍立得</option><option value="vintage">复古冲印</option><option value="plain">普通照片</option><option value="postcard">明信片</option><option value="stamp">邮票边框</option></select></label><label>显示方式<select id="photoFit"><option value="cover">填满裁切</option><option value="contain">完整显示</option></select></label><label>横向焦点 <input id="photoX" type="range" min="0" max="100" value="50"></label><label>纵向焦点 <input id="photoY" type="range" min="0" max="100" value="50"></label><input id="photoTitle" class="adv-in1" type="text" maxlength="200" placeholder="照片正面小标题（可选）"><textarea id="photoBack" class="adv-ta" placeholder="照片背面的故事、日期或签名"></textarea><div class="adv-photo-live" id="photoLive"></div>';
   frame.appendChild(photoOptions);
+  const currentPhoto = () => ({
+    front: {
+      url: uploadedImageUrl || '', frame: photoOptions.querySelector('#photoFrame').value,
+      fit: photoOptions.querySelector('#photoFit').value,
+      positionX: +photoOptions.querySelector('#photoX').value,
+      positionY: +photoOptions.querySelector('#photoY').value,
+      title: photoOptions.querySelector('#photoTitle').value,
+    },
+    back: { text: photoOptions.querySelector('#photoBack').value, date: '', signature: '' },
+  });
+  function updatePhotoPreview() {
+    const live = photoOptions.querySelector('#photoLive');
+    live.replaceChildren();
+    if (uploadedImageUrl || previewObjectUrl) live.appendChild(buildPhotoView(currentPhoto(), '一张冬日照片', { src: previewObjectUrl || undefined }));
+  }
+  photoOptions.addEventListener('input', updatePhotoPreview);
+  photoOptions.addEventListener('change', updatePhotoPreview);
   imgIn.onchange = async () => {
     const file = imgIn.files?.[0];
     if (!file) return;
     if (file.size > 5 * 1024 * 1024) { toast('图片不能超过 5MB'); imgIn.value = ''; return; }
-    // 预览
-    const preview = document.createElement('img');
-    preview.className = 'adv-img-preview';
-    preview.src = URL.createObjectURL(file);
-    imgPreviewWrap.innerHTML = '';
-    imgPreviewWrap.appendChild(preview);
-    // 暂存到浏览器（发布时再转存到 GitHub 仓库）
+    if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+    previewObjectUrl = URL.createObjectURL(file);
+    imgPreviewWrap.replaceChildren();
+    updatePhotoPreview();
+    previewBtn.disabled = true;
+    saveBtn.disabled = true;
     try {
       const res = await Backend.uploadFile(file);
       uploadedImageUrl = res.url;
+      if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+      previewObjectUrl = '';
+      updatePhotoPreview();
+      persistDraft();
     } catch (e) {
       toast('上传失败：' + e.message);
+    } finally {
+      previewBtn.disabled = false;
+      saveBtn.disabled = false;
     }
   };
 
@@ -1153,6 +1708,17 @@ async function openEditor(defaultDay) {
     }
   };
 
+  const makeGroup = (title, subtitle, nodes, open = false) => {
+    const group = document.createElement('details'); group.className = 'adv-editor-group'; group.open = open;
+    const summary = document.createElement('summary'); summary.textContent = title;
+    const hint = document.createElement('small'); hint.textContent = subtitle; summary.appendChild(hint);
+    group.appendChild(summary); frame.insertBefore(group, nodes[0]); group.append(...nodes); return group;
+  };
+  makeGroup('信与日期', '文字是礼物的主角', [dayLabel, dayIn, textLabel, textArea], true);
+  makeGroup('一首歌', '公开元数据自动识别，手填优先', [spLabel, urlRow, musicMetaRow, albumIn, coverIn, musicStatus, urlPreview]);
+  makeGroup('照片与相纸', '五种边框与裁切焦点实时预览', [imgLabel, imgIn, imgPreviewWrap, photoOptions]);
+  makeGroup('附件与声音', 'PDF、MIDI、MusicXML 与录音', [attachmentLabel, attachmentIn, recLabel, recRow]);
+
   // 操作行
   const msgSpan = document.createElement('span');
   msgSpan.className = 'adv-hint';
@@ -1160,7 +1726,7 @@ async function openEditor(defaultDay) {
   const cancelBtn = document.createElement('button');
   cancelBtn.className = 'adv-btn';
   cancelBtn.textContent = '取消';
-  cancelBtn.onclick = closeOverlay;
+  cancelBtn.onclick = () => closeOverlay();
 
   // 从当前编辑器内容构造 items，供「封好」与「预览对方视角」共用。
   function collectItems() {
@@ -1171,7 +1737,7 @@ async function openEditor(defaultDay) {
     const musicUrl = urlIn.value.trim();
     if (musicUrl) {
       const parsed = window.AdventMusic?.parseMusicUrl(musicUrl, {
-        name: nameIn.value.trim(), artist: artistIn.value.trim(), cover: coverIn.value.trim(),
+        name: nameIn.value.trim(), artist: artistIn.value.trim(), album: albumIn.value.trim(), cover: coverIn.value.trim(),
       });
       if (parsed) items.push(parsed);
       else return { error: '音乐链接格式不认识' };
@@ -1179,7 +1745,7 @@ async function openEditor(defaultDay) {
 
     if (uploadedImageUrl) {
       const asPhoto=photoOptions.querySelector('#asPhoto').checked;
-      if(asPhoto)items.push({type:'photo',photo:{front:{url:uploadedImageUrl,frame:photoOptions.querySelector('#photoFrame').value,positionX:+photoOptions.querySelector('#photoX').value,positionY:+photoOptions.querySelector('#photoY').value,fit:'cover',title:''},back:{text:photoOptions.querySelector('#photoBack').value,date:'',signature:''}}});
+      if(asPhoto)items.push({type:'photo',photo:currentPhoto()});
       else items.push({ type: 'image', url: uploadedImageUrl });
     }
     if (recUploadUrl) items.push({ type: 'voice', url: recUploadUrl });
@@ -1191,9 +1757,11 @@ async function openEditor(defaultDay) {
   const previewBtn = document.createElement('button');
   previewBtn.className = 'adv-btn';
   previewBtn.textContent = '👁 预览对方视角';
-  previewBtn.onclick = () => {
+  previewBtn.onclick = async () => {
     const day = parseInt(dayIn.value);
     if (!day || day < 1 || day > 25) { msgSpan.textContent = '日期要在 1—25 之间'; return; }
+    previewBtn.disabled = true;
+    try { await identifyMusic(); } finally { previewBtn.disabled = false; }
     const { items, error } = collectItems();
     if (error) { msgSpan.textContent = error; return; }
     if (!items || !items.length) { msgSpan.textContent = '写点什么再预览~'; return; }
@@ -1213,11 +1781,17 @@ async function openEditor(defaultDay) {
 
     saveBtn.disabled = true;
     try {
-      Backend.hide(day, items, items.some(i => i.type === 'song') ? 'chanson' : 'lettre');
+      await identifyMusic();
+      const collected = collectItems();
+      if (collected.error) { msgSpan.textContent = collected.error; saveBtn.disabled = false; return; }
+      if (!collected.items?.length) { msgSpan.textContent = '写点什么再封好~'; saveBtn.disabled = false; return; }
+      Backend.hide(day, collected.items, collected.items.some(i => i.type === 'song') ? 'chanson' : 'lettre');
       board = Backend.getBoard();
       refresh();
+      editorDirty = false;
+      try { localStorage.removeItem(draftKey); } catch {}
       toast(`12月${day}日又多了一份礼物 ♥`);
-      closeOverlay();
+      closeOverlay(true);
     } catch (e) {
       msgSpan.textContent = e.message;
       saveBtn.disabled = false;
@@ -1225,7 +1799,7 @@ async function openEditor(defaultDay) {
   };
 
   const row = document.createElement('div');
-  row.className = 'adv-row';
+  row.className = 'adv-row adv-editor-actions';
   row.appendChild(msgSpan);
   row.appendChild(cancelBtn);
   row.appendChild(previewBtn);
@@ -1236,14 +1810,58 @@ async function openEditor(defaultDay) {
   overlay.appendChild(sheet);
   // 草稿只存在本地，按身份/日期隔离；不会进入 Backend.hide 或 GitHub 同步。
   const draftKey = `advent-v4-draft:${Backend.getWho()}:${dayIn.value || 'new'}`;
-  const draftFields = [...sheet.querySelectorAll('input:not([type=file]), textarea')];
-  try { const draft = JSON.parse(localStorage.getItem(draftKey) || 'null'); if (draft?.values) draftFields.forEach((el, i) => { if (draft.values[i] !== undefined) el.value = draft.values[i]; }); } catch { /* ignore malformed local draft */ }
-  const persistDraft = () => { try { localStorage.setItem(draftKey, JSON.stringify({ version:1, saved_at:Date.now(), values:draftFields.map(el => el.value) })); } catch { /* storage full */ } };
-  draftFields.forEach(el => el.addEventListener('input', persistDraft));
-  saveBtn.addEventListener('click', () => { try { localStorage.removeItem(draftKey); } catch {} }, { once:true });
+  const draftFields = [...sheet.querySelectorAll('input:not([type=file]), select, textarea')];
+  const fieldKeys = draftFields.map((el, i) => el.id || el.name || `${el.tagName.toLowerCase()}:${i}`);
+  let restoredDraft = null;
+  try { restoredDraft = JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch { /* ignore malformed local draft */ }
+  if (restoredDraft?.values) {
+    draftFields.forEach((el, i) => {
+      const key = fieldKeys[i];
+      const value = Array.isArray(restoredDraft.values) ? restoredDraft.values[i] : restoredDraft.values[key];
+      if (value === undefined) return;
+      if (el.type === 'checkbox') el.checked = Boolean(value); else el.value = value;
+    });
+  }
+  uploadedImageUrl = restoredDraft?.assets?.image || '';
+  uploadedAttachment = restoredDraft?.assets?.attachment || null;
+  recUploadUrl = restoredDraft?.assets?.voice || '';
+  const restoredAutoFields = new Set(restoredDraft?.auto_music || []);
+  for (const [field, input] of Object.entries(musicInputs)) {
+    if (restoredAutoFields.has(field) && input.value) autoMusicValues[field] = input.value;
+    else if (input.value) manualMusicFields.add(field);
+  }
+  if (uploadedImageUrl) updatePhotoPreview();
+  editorDirty = false;
+  function persistDraft() {
+    if (editorClosed) return;
+    editorDirty = true;
+    const values = {};
+    draftFields.forEach((el, i) => { values[fieldKeys[i]] = el.type === 'checkbox' ? el.checked : el.value; });
+    try { localStorage.setItem(draftKey, JSON.stringify({
+      version: 2, saved_at: Date.now(), values,
+      legacy_values: draftFields.map(el => el.type === 'checkbox' ? el.checked : el.value),
+      assets: { image: uploadedImageUrl, attachment: uploadedAttachment, voice: recUploadUrl },
+      auto_music: Object.keys(autoMusicValues).filter(field => !manualMusicFields.has(field)),
+    })); } catch { /* storage full */ }
+  }
+  draftFields.forEach(el => {
+    el.addEventListener('input', persistDraft);
+    el.addEventListener('change', persistDraft);
+  });
+  window.addEventListener('beforeunload', beforeUnload);
   overlay.onclick = e => { if (e.target === overlay) closeOverlay(); };
 
-  function closeOverlay() {
+  function beforeUnload(e) {
+    if (!editorDirty || editorClosed) return;
+    e.preventDefault(); e.returnValue = '';
+  }
+  function closeOverlay(force = false) {
+    if (!force && editorDirty && !window.confirm('礼物尚未封好。要保留本地草稿并关上编辑器吗？')) return;
+    editorClosed = true;
+    clearTimeout(musicTimer);
+    musicRequestSeq++;
+    if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+    window.removeEventListener('beforeunload', beforeUnload);
     overlay.classList.remove('on');
     overlay.style.display = 'none';
     overlay.innerHTML = '';
@@ -1341,21 +1959,23 @@ function showPublish() {
   const frame = document.createElement('div');
   frame.className = 'adv-frame';
   const alreadyPat = Backend.hasPat();
+  const rememberedPat = Backend.hasRememberedPat();
   frame.innerHTML = `
     <div class="adv-ctop"><span class="d">发布</span><span class="by">加密推送到 GitHub</span></div>
     <p class="adv-body" style="margin-top:12px;font-size:13.5px;line-height:1.9">
       把你写好的礼物加密后推送到 GitHub，砚砚同步后就能看到。<br>
-      Token 只保存在当前浏览器标签页里（关闭标签页即清除），<br>
-      不写入本页源码、仓库、链接或日志，只用于写入礼物数据仓库。
+      Token 不会写入源码、礼物数据、公开仓库或日志。默认只留在当前标签页；
+      勾选记住后会明文保存在此浏览器的 localStorage，直到你主动清除。<br>
+      localStorage 不是安全凭证库；共享电脑或浏览器配置文件时请勿记住 Token。
     </p>
   `;
 
-  // Token 输入（当前标签页会话内有效；关闭标签页自动清除）
+  // Token 默认仅本次会话有效；勾选记住后明文保存在本机 localStorage
   const tokenLabel = document.createElement('span');
   tokenLabel.className = 'adv-lab';
   tokenLabel.style.marginTop = '10px';
   tokenLabel.innerHTML = alreadyPat
-    ? 'GitHub Token <i>本标签页已提供，如需更换请在下方粘贴新 Token</i>'
+    ? `GitHub Token <i>${rememberedPat ? '此设备已记住' : '本标签页已提供'}，如需更换请在下方粘贴新 Token</i>`
     : 'GitHub Token <i>Fine-grained PAT，仅限礼物数据仓库的 Contents 读写</i>';
   frame.appendChild(tokenLabel);
 
@@ -1365,6 +1985,22 @@ function showPublish() {
   tokenIn.placeholder = 'github_pat_…' + (alreadyPat ? '（留空则使用本次会话已提供的 Token）' : '');
   tokenIn.autocomplete = 'off';
   frame.appendChild(tokenIn);
+
+  const rememberLabel = document.createElement('label');
+  rememberLabel.className = 'adv-token-remember';
+  const rememberIn = document.createElement('input'); rememberIn.type = 'checkbox'; rememberIn.checked = rememberedPat;
+  rememberLabel.append(rememberIn, document.createTextNode('在此设备记住 Token（明文 localStorage，有风险）'));
+  frame.appendChild(rememberLabel);
+
+  const clearTokenBtn = document.createElement('button');
+  clearTokenBtn.className = 'adv-btn adv-clear-token'; clearTokenBtn.type = 'button'; clearTokenBtn.textContent = '清除本机 Token';
+  clearTokenBtn.disabled = !alreadyPat;
+  clearTokenBtn.onclick = () => {
+    Backend.clearPat(); tokenIn.value = ''; rememberIn.checked = false; clearTokenBtn.disabled = true;
+    tokenLabel.querySelector('i').textContent = '本机与当前标签页的 Token 已清除';
+    msgSpan.textContent = 'Token 已清除；已发布到 GitHub 的数据不会被删除。';
+  };
+  frame.appendChild(clearTokenBtn);
 
   const msgSpan = document.createElement('div');
   msgSpan.className = 'adv-status';
@@ -1377,7 +2013,7 @@ function showPublish() {
   const cancelBtn = document.createElement('button');
   cancelBtn.className = 'adv-btn';
   cancelBtn.textContent = '取消';
-  cancelBtn.onclick = closeOverlay;
+  cancelBtn.onclick = () => closeOverlay();
 
   const pubBtn = document.createElement('button');
   pubBtn.className = 'adv-btn solid';
@@ -1385,8 +2021,10 @@ function showPublish() {
   pubBtn.onclick = async () => {
     const tokenValue = tokenIn.value.trim();
     if (tokenValue) {
-      try { Backend.setPat(tokenValue); }
+      try { Backend.setPat(tokenValue, rememberIn.checked); }
       catch (e) { msgSpan.textContent = e.message; return; }
+    } else if (alreadyPat) {
+      Backend.setPatRemember(rememberIn.checked);
     }
     if (!Backend.hasPat()) {
       msgSpan.textContent = '请先粘贴 GitHub Token（Fine-grained PAT）';
@@ -1397,10 +2035,16 @@ function showPublish() {
     msgSpan.textContent = '正在加密并推送…';
     try {
       const r = await Backend.publish(msg => { msgSpan.textContent = msg; });
-      msgSpan.innerHTML = `<b>已发布</b> · ${r.message}`;
+      msgSpan.replaceChildren();
+      const ok = document.createElement('b'); ok.textContent = '已发布并核验远端';
+      msgSpan.append(ok, document.createTextNode(` · ${r.message}`));
+      board = Backend.getBoard(); refresh();
       setTimeout(closeOverlay, 2200);
     } catch (e) {
-      msgSpan.innerHTML = `<b style="color:#8d2f2f">失败</b> · ${e.message}`;
+      const labels = { invalid_token: 'Token 无效或已撤销', permission: '权限不足', api_limit: 'GitHub 接口限流', network: '网络失败' };
+      msgSpan.replaceChildren();
+      const fail = document.createElement('b'); fail.textContent = labels[e.reason] || '发布失败';
+      msgSpan.append(fail, document.createTextNode(` · ${e.message}`));
       pubBtn.disabled = false;
     }
   };
@@ -1463,6 +2107,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (deskPhoto) deskPhoto.onclick = () => openPhotoFrame();
   if (deskNote) deskNote.onclick = () => openTodayNote();
   if (deskRecord) deskRecord.onclick = () => openRecordPlayer();
+  document.getElementById('deskRecordCard').onclick = () => openRecordPlayer();
   refreshWhoBtn();
   const whoBtn = document.getElementById('whoBtn');
   if (whoBtn) {

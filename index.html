@@ -6,9 +6,9 @@
 <title>砚砚 × 三三 · 双人降临历</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&family=Pinyon+Script&family=Noto+Serif+SC:wght@400&display=swap">
-<link rel="stylesheet" href="advent.css?v=8a1c3e">
-<link rel="stylesheet" href="music.css?v=8a1c3e">
-<link rel="stylesheet" href="vendor/abcjs-audio.css?v=8a1c3e">
+<link rel="stylesheet" href="advent.css?v=8.1.0">
+<link rel="stylesheet" href="music.css?v=8.1.0">
+<link rel="stylesheet" href="vendor/abcjs-audio.css?v=8.1.0">
 <style>
   /* 顶栏 */
   .adv-topbar {
@@ -91,7 +91,7 @@
     <!-- 房子舞台（house.js 挂载点） -->
     <div class="adv-stage" id="stage"></div>
 
-    <!-- 圣诞书桌：普通操作在这里发生，礼物遮罩只保留给真正的沉浸式场景 -->
+    <!-- 圣诞书桌：倒计时、礼物堆、共享书桌与常用操作 -->
     <section class="adv-desk" id="desk" aria-label="圣诞书桌">
       <div class="adv-desk-top">
         <span class="adv-desk-label">Christmas desk</span>
@@ -101,16 +101,51 @@
         <span class="adv-desk-calendar-day" id="deskDay">—</span>
         <span><b>圣诞日历</b><small id="deskCountdown">等候十二月的雪</small></span>
       </div>
-      <div class="adv-desk-grid">
+
+      <section class="adv-gift-stats" aria-label="双方礼物统计">
+        <div class="adv-desk-section-head"><span>Our little gifts</span><small id="giftStatsStatus">正在核对礼物堆…</small></div>
+        <div class="adv-gift-piles">
+          <article class="adv-gift-pile adv-gift-pile-yan" aria-label="砚砚藏入的礼物">
+            <div class="adv-pile-scene" aria-hidden="true"><span class="adv-pile-star">✦</span><span class="adv-pile-sprig">❧</span><div class="adv-pile-boxes"></div><span class="adv-pile-ground"></span></div>
+            <div class="adv-pile-caption"><span>砚砚的礼物堆</span><b id="yanGiftCount">—</b></div>
+          </article>
+          <article class="adv-gift-pile adv-gift-pile-san" aria-label="三三藏入的礼物">
+            <div class="adv-pile-scene" aria-hidden="true"><span class="adv-pile-star">✧</span><span class="adv-pile-sprig">❧</span><div class="adv-pile-boxes"></div><span class="adv-pile-ground"></span></div>
+            <div class="adv-pile-caption"><span>三三的礼物堆</span><b id="sanGiftCount">—</b></div>
+          </article>
+        </div>
+        <div class="adv-gift-summary" id="giftSummary" aria-live="polite"></div>
+      </section>
+
+      <section class="adv-desk-tools" aria-label="常用功能">
         <button class="adv-desk-object adv-mail" id="deskMail" type="button"><span class="adv-object-mark">✉</span><b>圣诞邮局</b><small id="deskMailStatus">等待新信件</small></button>
         <button class="adv-desk-object adv-frame-object" id="deskPhoto" type="button"><span class="adv-object-photo">♡</span><b>桌面相框</b><small>翻看我们的照片</small></button>
         <button class="adv-desk-object adv-note-object" id="deskNote" type="button"><span class="adv-object-mark">✎</span><b>今日便签</b><small>留一句冬日的话</small></button>
-        <button class="adv-desk-object adv-record" id="deskRecord" type="button"><span class="adv-object-mark">♫</span><b>圣诞唱片机</b><small>点击播放背景音乐</small></button>
-      </div>
+        <button class="adv-desk-object adv-record" id="deskRecord" type="button"><span class="adv-object-mark">♫</span><b>圣诞唱片机</b><small id="deskRecordStatus">点击播放背景音乐</small></button>
+      </section>
+
+      <section class="adv-desk-display" aria-label="共同书桌">
+        <div class="adv-desk-section-head"><span>On our desk</span><small>只展示已经公开的照片与便签</small></div>
+        <div class="adv-desk-surface">
+          <svg class="adv-desk-botanical" viewBox="0 0 180 90" aria-hidden="true"><path d="M8 78C52 67 87 49 161 18M42 62C30 48 29 35 39 24M70 51C62 35 66 20 80 9M101 38C107 24 122 17 139 16"/><path d="M39 24C27 23 20 29 19 40C31 41 38 35 39 24ZM80 9C73 1 64 1 56 7C63 17 72 18 80 9ZM139 16C145 6 155 3 166 7C161 18 151 21 139 16Z"/></svg>
+          <div class="adv-desk-frame-slot" id="deskFrameSlot"><div class="adv-empty-frame">♡</div><small>等一张公开的桌面照片</small></div>
+          <div class="adv-desk-note-slot" id="deskNoteSlot"><div class="adv-empty-note"> aujourd’hui <span>把小小的日常留在桌上</span></div></div>
+          <button class="adv-desk-record-slot" id="deskRecordCard" type="button" aria-label="打开圣诞唱片机"><span class="adv-mini-disc">♫</span><span><small>now on the turntable</small><b id="deskTrackName">冬日留声机</b></span></button>
+          <span class="adv-desk-pencil" aria-hidden="true">✎</span>
+        </div>
+      </section>
+
       <div class="adv-desk-bottom">
-        <button class="adv-desk-drawer" id="deskDiary" type="button">▱ 手账抽屉 <span>贴纸 · 信纸 · 草稿</span></button>
-        <button class="adv-desk-pen" id="deskWrite" type="button">✎ 写信 / 塞一份礼物</button>
+        <button class="adv-desk-pen" id="deskWrite" type="button"><b>✎ 藏一份礼物</b><span>写信、照片、音乐与手账</span></button>
+        <button class="adv-desk-drawer" id="deskDiary" type="button"><b>▱ 手账抽屉</b><span>贴纸 · 信纸 · 草稿</span></button>
       </div>
+      <nav class="adv-desk-actions" aria-label="书桌操作">
+        <button class="adv-pill" onclick="UI.openScrapbook()">手账贴纸</button>
+        <button class="adv-pill" onclick="UI.syncNow()">↻ 同步</button>
+        <button class="adv-pill" onclick="UI.showArchive()">存档</button>
+        <button class="adv-pill" onclick="UI.showPublish()">⬆ 发布</button>
+        <button class="adv-pill" onclick="UI.showHelp()">说明</button>
+      </nav>
       <div class="adv-puff" aria-hidden="true">🐶</div>
       <audio id="deskAudio" preload="metadata"></audio>
     </section>
@@ -121,15 +156,6 @@
     <!-- 同步状态 -->
     <div class="adv-sync-line" id="syncLine">正在同步…</div>
 
-    <!-- 底部操作 -->
-    <div class="adv-links">
-      <button class="adv-pill gold" onclick="UI.openEditor()">✎ 追加礼物</button>
-      <button class="adv-pill" onclick="UI.openScrapbook()">▱ 手账贴纸</button>
-      <button class="adv-pill" onclick="UI.syncNow()">↻ 同步</button>
-      <button class="adv-pill" onclick="UI.showArchive()">存档</button>
-      <button class="adv-pill" onclick="UI.showPublish()">⬆ 发布</button>
-      <button class="adv-pill" onclick="UI.showHelp()">说明</button>
-    </div>
 
   </div>
 </div>
@@ -141,8 +167,8 @@
 <div class="adv-toast" id="toast" aria-live="polite"></div>
 
 <!-- 脚本：顺序很重要 -->
-<script src="house.js?v=8a1c3e" type="module"></script>
-<script src="music.js?v=8a1c3e"></script>
-<script src="app.js?v=8a1c3e" type="module"></script>
+<script src="house.js?v=8.1.0" type="module"></script>
+<script src="music.js?v=8.1.0"></script>
+<script src="app.js?v=8.1.0" type="module"></script>
 </body>
 </html>

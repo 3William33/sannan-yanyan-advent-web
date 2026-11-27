@@ -97,7 +97,7 @@ def setup_mock():
     os.makedirs(MOCKDATA + '/assets/stickers', exist_ok=True)
     os.makedirs(MOCKGH, exist_ok=True)
     idx = build_fiction_index()
-    with open(MOCKDATA + '/assets/stickers/sticker_index.json', 'w') as f:
+    with open(MOCKDATA + '/assets/stickers/sticker_index.json', 'w', encoding='utf-8') as f:
         json.dump(idx, f, ensure_ascii=False)
     # 占位 PNG：虚构纯色块，仅用于让 img 有 src
     for s in idx['stickers']:
@@ -156,10 +156,10 @@ def run_browser(pw, browser_type, label):
         page.locator('#stklibHost .adv-stklib-color').select_option('all')
         page.wait_for_timeout(150)
 
-        # 搜索：雪人 → 1 图案
+        # 搜索：雪人 → 1 个图案卡（3 个配色聚合）
         page.locator('#stklibHost .adv-stklib-search').fill('雪人')
         page.wait_for_timeout(300)
-        check(f'[{label}] 按名称/标签搜索（雪人=1）', cards.count() == 1, f'cards={cards.count()}')
+        check(f'[{label}] 按名称/标签搜索（雪人=1图案）', cards.count() == 1, f'cards={cards.count()}')
         page.locator('#stklibHost .adv-stklib-search').fill('')
         page.wait_for_timeout(300)
 
@@ -252,8 +252,8 @@ def run_browser(pw, browser_type, label):
         check(f'[{label}] 竖屏有收纳册折叠按钮', page.locator('#stklibToggle').count() == 1)
         overflow = page.evaluate('document.documentElement.scrollWidth > document.documentElement.clientWidth + 1')
         check(f'[{label}] 竖屏无横向溢出', not overflow)
-        # iPhone 竖屏：底部「手账贴纸」按钮可作为入口（书桌此时隐藏）
-        entry = page.locator('.adv-links [onclick="UI.openScrapbook()"]')
+        # iPhone 竖屏：圣诞书桌保持可见，手账抽屉可直接进入
+        entry = page.locator('#deskDiary')
         check(f'[{label}] iPhone 竖屏有手账入口', entry.count() == 1 and entry.is_visible())
         # 深浅色：body 加 dusk 类后收纳册文字色变化（可读性）
         page.evaluate("document.body.classList.add('dusk')")
