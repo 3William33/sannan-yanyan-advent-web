@@ -10,10 +10,11 @@ import json
 import os
 import re
 import sys
+import tempfile
 from flask import Flask, request, make_response, jsonify
 
-DATA_DIR = sys.argv[1] if len(sys.argv) > 1 else '/tmp/mockdata'
-GH_DIR = sys.argv[2] if len(sys.argv) > 2 else '/tmp/mockgh'
+DATA_DIR = sys.argv[1] if len(sys.argv) > 1 else str(os.path.join(tempfile.gettempdir(), 'mockdata'))
+GH_DIR = sys.argv[2] if len(sys.argv) > 2 else str(os.path.join(tempfile.gettempdir(), 'mockgh'))
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(GH_DIR, exist_ok=True)
 
@@ -33,7 +34,11 @@ def cors(resp):
 
 @app.route('/data/<path:name>')
 def data_file(name):
-    path = os.path.join(DATA_DIR, name)
+    safe = os.path.normpath(name).strip('/')
+    if '..' in safe.split('/'):
+        return make_response('bad path', 400)
+    published = os.path.join(GH_DIR, safe.replace('/', os.sep))
+    path = published if os.path.exists(published) else os.path.join(DATA_DIR, safe.replace('/', os.sep))
     if not os.path.exists(path):
         return make_response('not found', 404)
     with open(path, 'rb') as f:
@@ -63,6 +68,14 @@ def contents(owner, repo, path):
     if request.method == 'GET':
         ref = request.args.get('ref')
         if not os.path.exists(dest):
+            fallback = os.path.join(DATA_DIR, os.path.normpath(path).strip('/').replace('/', os.sep))
+            if os.path.exists(fallback):
+                with open(fallback, 'rb') as f:
+                    content = f.read()
+                return jsonify({
+                    'name': os.path.basename(path), 'path': path, 'sha': _sha(content),
+                    'content': base64.b64encode(content).decode(), 'encoding': 'base64',
+                })
             return jsonify(message='Not Found'), 404
         with open(dest, 'rb') as f:
             content = f.read()

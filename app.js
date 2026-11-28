@@ -9,9 +9,9 @@
  */
 
 /* 版本号与 index.html 保持一致：每次发布同步更新，强制移动 Safari 重新拉取（它缓存较强） */
-import { mountHouse, iconSvg } from './house.js?v=8.1.0';
-import { Backend } from './backend.js?v=8.1.0';
-import { mountStickerLibrary } from './stickers.js?v=8.1.0';
+import { mountHouse, iconSvg } from './house.js?v=8.2.0';
+import { Backend } from './backend.js?v=8.2.0';
+import { mountStickerLibrary } from './stickers.js?v=8.2.0';
 
 /* ── 常量 ─────────────────────────────────────────────────────────── */
 const TZ = 'Asia/Shanghai';
@@ -110,8 +110,20 @@ function refresh() {
     deskCountdown.textContent = birthdayDays === 0 ? '圣诞快乐 · 生日快乐 🎂' : `距离圣诞与生日还有 ${birthdayDays} 天`;
   }
   if (deskMailStatus) {
-    const incoming = cells.reduce((n, c) => n + (c.new_count || 0), 0);
-    deskMailStatus.textContent = incoming ? `${incoming} 件新礼物 / 追加礼物` : `${opened} 扇窗已点亮`;
+    const post = board?.post_office || {};
+    const latest = post.latest;
+    deskMailStatus.textContent = `总 ${post.total_deliveries || 0} · 砚 ${post.yan_deliveries || 0} · 三 ${post.san_deliveries || 0} · 未读 ${post.unread_count || 0}`;
+    const latestLine = document.getElementById('deskMailLatest');
+    if (latestLine) {
+      const latestTime = latest
+        ? new Intl.DateTimeFormat('zh-CN', { timeZone: TZ, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(latest.created_at))
+        : '';
+      latestLine.textContent = latest
+        ? `近7天 ${post.recent_count || 0} · ${latestTime} ${latest.actor_name}${EVENT_TYPE_LABELS[latest.event_type] || latest.event_type}`
+        : `近7天 ${post.recent_count || 0} · 暂无投递活动`;
+    }
+    const mailButton = document.getElementById('deskMail');
+    if (mailButton) mailButton.title = latest ? `${formatShanghai(latest.created_at)} · ${latest.actor_name}${EVENT_TYPE_LABELS[latest.event_type] || latest.event_type}「${latest.title || '一份礼物'}」` : '成功投递后，真实活动会出现在这里';
   }
   renderGiftStats(giftStats);
   renderDeskSurface(companion, publicTracks, sync);
@@ -275,6 +287,11 @@ function applySyncStatus(sync) {
 function refreshWhoBtn() {
   const btn = document.getElementById('whoBtn');
   if (btn) btn.textContent = Backend.getWho() === 'yan' ? '偷看记名：砚砚' : '偷看记名：三三';
+  const writerBtn = document.getElementById('writerBtn');
+  const name = Backend.getWriter() === 'yan' ? '砚砚' : '三三';
+  if (writerBtn) writerBtn.textContent = `写礼物：${name}`;
+  const writeLabel = document.querySelector('#deskWrite b');
+  if (writeLabel) writeLabel.textContent = `✎ ${name}藏一份礼物`;
 }
 
 /* ── 拉取看板 ────────────────────────────────────────────────────── */
@@ -335,7 +352,10 @@ async function onWindowTap(day) {
   }
 
   // 开窗动画 + 显示礼物卡
-  const { rect, done } = await (houseCtrl?.play?.(day) ?? { rect: { left: 0, top: 0, width: 0, height: 0 }, done: null });
+  const opening = result.firstOpen
+    ? await (houseCtrl?.play?.(day) ?? { rect: { left: 0, top: 0, width: 0, height: 0 }, done: null })
+    : { rect: houseCtrl?.rectOf?.(day) || { left: innerWidth / 2 - 20, top: innerHeight / 2 - 20, width: 40, height: 40 }, done: null };
+  const { rect, done } = opening;
   board = Backend.getBoard();
   refresh();
   showGiftCard(day, result.gifts, result.remote_extras || [], result.sannan_extras || [], rect, done);
@@ -513,17 +533,12 @@ function showSelfPreview(day, items) {
   const editor = document.getElementById('overlay');
   if (editor) editor.classList.add('is-preview-underlay');
 
-  const kind = items.some(i => i.type === 'song') ? 'chanson' : 'lettre';
-  const gifts = {
-    ai: {
-      day, kind, items,
-      note: '这是对方打开时会看到的样子（预览）',
-      id: `preview-${day}`,
-      answer: '',
-    },
-  };
+  const writer = Backend.getWriter();
+  const entry = { day, kind: items.some(i => i.type === 'song') ? 'chanson' : 'lettre', items, note: '这是对方打开时会看到的样子（预览）', id: `preview-${day}`, answer: '', from: writer === 'yan' ? '砚砚' : '三三', title: '预览礼物' };
+  const gifts = writer === 'yan' ? {} : { human_entries: [entry] };
+  const remoteExtras = writer === 'yan' ? [entry] : [];
   const rect = { left: innerWidth / 2 - 20, top: innerHeight / 2 - 20, width: 40, height: 40 };
-  showGiftCard(day, gifts, [], [], rect, () => {
+  showGiftCard(day, gifts, remoteExtras, [], rect, () => {
     host.remove();
     document.getElementById('overlay')?.classList.remove('is-preview-underlay');
   }, 'selfPreviewOverlay');
@@ -533,9 +548,10 @@ function showSelfPreview(day, items) {
     const front = host.querySelector('.adv-front .fhint');
     if (front) front.textContent = '对方视角预览 · 轻触翻开';
     const fd = host.querySelector('.adv-front .fby');
-    if (fd) fd.textContent = 'aperçu · 仅你可见';
+    if (fd) fd.textContent = writer === 'yan' ? 'de la part de 砚砚' : 'de la part de 三三';
     const hint = host.querySelector('.adv-row .adv-hint');
     if (hint) hint.textContent = '仅为预览，未真正封好';
+    host.querySelectorAll('.adv-memory-actions').forEach(actions => actions.remove());
   });
 }
 
@@ -1016,7 +1032,7 @@ function openDeskSheet(title, subtitle='Christmas desk') {
   const overlay=document.getElementById('overlay');overlay.innerHTML='';overlay.style.display='flex';overlay.classList.add('on');
   const sheet=document.createElement('div');sheet.className='adv-sheet adv-paper';const frame=document.createElement('div');frame.className='adv-frame';
   frame.innerHTML=`<div class="adv-ctop"><span class="d"></span><span class="by"></span></div>`;frame.querySelector('.d').textContent=title;frame.querySelector('.by').textContent=subtitle;
-  const body=document.createElement('div');body.className='adv-body adv-desk-sheet-body';const row=document.createElement('div');row.className='adv-row';const close=document.createElement('button');close.className='adv-btn';close.textContent='关上';close.onclick=closeMainOverlay;row.appendChild(close);frame.append(body,row);sheet.appendChild(frame);overlay.appendChild(sheet);overlay.onclick=e=>{if(e.target===overlay)closeMainOverlay();};return {body,row};
+  const body=document.createElement('div');body.className='adv-body adv-desk-sheet-body';const row=document.createElement('div');row.className='adv-row';const close=document.createElement('button');close.className='adv-btn';close.textContent='关上';close.onclick=closeMainOverlay;row.appendChild(close);frame.append(body,row);sheet.appendChild(frame);overlay.appendChild(sheet);overlay.onclick=e=>{if(e.target===overlay)closeMainOverlay();};return {body,row,sheet};
 }
 
 function openTodayNote() {
@@ -1032,13 +1048,115 @@ function openPhotoFrame() {
   const save=document.createElement('button');save.className='adv-btn solid';save.textContent='放进相框';save.onclick=()=>{try{Backend.setCompanion('frames',key,{src,note:note.value.slice(0,1000)});toast('相框已更新，下次发布会同步');closeMainOverlay();}catch{toast('照片太大，无法保存在浏览器');}};body.append(card,upload,note);row.appendChild(save);
 }
 
+const GIFT_TYPE_LABELS = { text:'文字', question:'问答', song:'歌曲', abc:'五线谱', image:'图片', photo:'照片拼贴', comic:'漫画', scrapbook:'手账', voice:'语音', audio:'音频', attachment:'附件', lettre:'文字', chanson:'歌曲', melodie:'五线谱', dessin:'图片', cadeau:'礼物', mot:'文字', ensemble:'礼物', gift:'礼物' };
+const EVENT_TYPE_LABELS = { create:'新增投递', update:'修改礼物', delete:'删除礼物', attachment:'添加附件', open:'正式开启', seal:'正式封箱' };
+const STATUS_LABELS = { opened:'已开启', unopened:'未开启', sealed:'已封存' };
+const senderName = sender => sender === 'yan' ? '砚砚' : '三三';
+function formatShanghai(value) {
+  try { return new Intl.DateTimeFormat('zh-CN', { timeZone:TZ, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).format(new Date(value)); }
+  catch { return value || '时间未知'; }
+}
+function shanghaiDateKey(value) {
+  try { return new Intl.DateTimeFormat('en-CA', { timeZone:TZ, year:'numeric', month:'2-digit', day:'2-digit' }).format(new Date(value)); }
+  catch { return ''; }
+}
+function makeFilterSelect(options, value, label) {
+  const select=document.createElement('select');select.className='adv-in1 adv-archive-filter';select.setAttribute('aria-label',label);
+  for(const [key,text] of options){const option=document.createElement('option');option.value=key;option.textContent=text;option.selected=key===value;select.appendChild(option);}
+  return select;
+}
+function filterToolbar(fields, state, storageKey, onChange) {
+  const bar=document.createElement('div');bar.className='adv-archive-filters';
+  fields.forEach(field=>{
+    const control=field.type==='search'||field.type==='date'?document.createElement('input'):makeFilterSelect(field.options,state[field.key],field.label);
+    if(field.type==='search'||field.type==='date'){control.type=field.type;control.className='adv-in1 adv-archive-filter';control.value=state[field.key]||'';control.setAttribute('aria-label',field.label);if(field.type==='search')control.placeholder=field.label;}
+    control.addEventListener(field.type==='search'?'input':'change',()=>{state[field.key]=control.value;try{sessionStorage.setItem(storageKey,JSON.stringify(state));}catch{}onChange();});bar.appendChild(control);
+  });
+  return bar;
+}
+
+function openCollection(defaultSender='', defaultDay='') {
+  const {body,row,sheet}=openDeskSheet('双人礼物收藏馆','notre collection');sheet.classList.add('adv-archive-sheet');
+  let state={sender:'',day:'',type:'',status:'',search:''};
+  try{state={...state,...JSON.parse(sessionStorage.getItem('advent-v4-collection-filters')||'null'),...(defaultSender?{sender:defaultSender}:{}),...(defaultDay?{day:String(defaultDay)}:{})};}catch{}
+  const layout=document.createElement('div');layout.className='adv-archive-layout';
+  const sidebar=document.createElement('aside');sidebar.className='adv-archive-sidebar';const main=document.createElement('div');main.className='adv-archive-main';layout.append(sidebar,main);body.appendChild(layout);
+  const close=row.querySelector('.adv-btn');close.textContent='关闭收藏馆';
+  function render(){
+    const data=Backend.getBoard().collection;const rules=Backend.calendarRules();
+    sidebar.replaceChildren();main.replaceChildren();
+    const sideTitle=document.createElement('h3');sideTitle.textContent='双方礼物堆';sidebar.appendChild(sideTitle);
+    for(const sender of ['yan','san']){const button=document.createElement('button');button.type='button';button.className=`adv-collection-pile${state.sender===sender?' on':''}`;button.innerHTML=`<span>${senderName(sender)}的礼物</span><b>${data.counts[sender]}</b>`;button.onclick=()=>{state.sender=state.sender===sender?'':sender;try{sessionStorage.setItem('advent-v4-collection-filters',JSON.stringify(state));}catch{}render();};sidebar.appendChild(button);}
+    const total=document.createElement('div');total.className='adv-collection-total';total.textContent=`共 ${data.counts.total} 份礼物`;sidebar.appendChild(total);
+    const note=document.createElement('p');note.className='adv-hint';note.textContent='点击礼物堆可按发送者筛选。列表与展开不会开启窗户，也不会增加偷看。';sidebar.appendChild(note);
+    const permission=document.createElement('p');permission.className='adv-permission-note';permission.textContent=rules.label;sidebar.appendChild(permission);
+    const heading=document.createElement('div');heading.className='adv-archive-heading';heading.innerHTML='<h3>按日期翻阅</h3><span>同一天可以有多份礼物</span>';main.appendChild(heading);
+    const types=[...new Set(data.days.flatMap(day=>day.gifts.map(gift=>gift.type)))];
+    const fields=[
+      {key:'sender',label:'发送者',options:[['','全部发送者'],['yan','砚砚'],['san','三三']]},
+      {key:'day',label:'礼物日期',options:[['','全部日期'],...Array.from({length:25},(_,i)=>[String(i+1),`12月${i+1}日`])]},
+      {key:'type',label:'礼物类型',options:[['','全部类型'],...types.map(type=>[type,GIFT_TYPE_LABELS[type]||type])]},
+      {key:'status',label:'开启状态',options:[['','全部状态'],...Object.entries(STATUS_LABELS)]},
+      {key:'search',type:'search',label:'搜索标题或编号'},
+    ];
+    main.appendChild(filterToolbar(fields,state,'advent-v4-collection-filters',render));
+    const query=state.search.trim().toLowerCase();let shown=0;
+    for(const group of data.days){
+      if(state.day&&Number(state.day)!==group.day)continue;
+      const gifts=group.gifts.filter(gift=>(!state.sender||gift.sender===state.sender)&&(!state.type||gift.type===state.type)&&(!state.status||gift.status===state.status)&&(!query||`${gift.title} ${gift.id} ${senderName(gift.sender)}`.toLowerCase().includes(query)));
+      shown+=gifts.length;const details=document.createElement('details');details.className='adv-archive-day';details.open=Boolean(state.day)||gifts.some(gift=>gift.opened);
+      const summary=document.createElement('summary');summary.textContent=`12月${group.day}日 · ${gifts.length} 份`;details.appendChild(summary);
+      if(!gifts.length){const empty=document.createElement('p');empty.className='adv-archive-empty';empty.textContent=query||state.sender||state.type||state.status?'这个日期没有符合筛选的礼物。':'这一天还没有礼物，空着也很好。';details.appendChild(empty);}
+      for(const gift of gifts){
+        const item=document.createElement('article');item.className='adv-archive-gift';const toggle=document.createElement('button');toggle.type='button';toggle.className='adv-archive-gift-summary';toggle.setAttribute('aria-expanded','false');
+        const title=document.createElement('b');title.textContent=gift.title||`${senderName(gift.sender)}的一份礼物`;const meta=document.createElement('small');meta.textContent=`${senderName(gift.sender)} · ${GIFT_TYPE_LABELS[gift.type]||gift.type} · ${STATUS_LABELS[gift.status]}`;const mark=document.createElement('span');mark.textContent=gift.can_read?'▾':'⌑';toggle.append(title,meta,mark);item.appendChild(toggle);
+        const detail=document.createElement('div');detail.className='adv-archive-gift-detail';detail.hidden=true;
+        toggle.onclick=()=>{
+          if(!detail.hidden){detail.hidden=true;toggle.setAttribute('aria-expanded','false');mark.textContent=gift.can_read?'▾':'⌑';return;}
+          if(!gift.can_read){detail.replaceChildren();const locked=document.createElement('p');locked.className='adv-archive-locked';locked.textContent='尚未解锁：只显示投递信息。请回到圣诞屋按原有规则开盒或偷看。';detail.appendChild(locked);detail.hidden=false;toggle.setAttribute('aria-expanded','true');mark.textContent='▴';return;}
+          try{
+            const content=Backend.readGiftContent(gift.day,gift.id);const entries=[...(content.gifts?.ai?[content.gifts.ai]:[]),...(content.human_entries||[]),...(content.remote_extras||[]),...(content.sannan_extras||[])];const entry=entries.find(value=>value.id===gift.id);
+            detail.replaceChildren();if(entry)renderRemoteEntry(detail,entry,`${senderName(gift.sender)} · 12月${gift.day}日`,gift.day);else{const missing=document.createElement('p');missing.textContent='礼物内容暂时不可用，请同步后重试。';detail.appendChild(missing);}
+            if(gift.own){const actions=document.createElement('div');actions.className='adv-row';if(gift.can_edit){const edit=document.createElement('button');edit.type='button';edit.className='adv-btn';edit.textContent='编辑这份礼物';edit.onclick=()=>openEditor(gift.day,gift.id);actions.appendChild(edit);const remove=document.createElement('button');remove.type='button';remove.className='adv-btn';remove.textContent='删除';let armed=false;remove.onclick=()=>{if(!armed){armed=true;remove.textContent='再次点击确认删除';setTimeout(()=>{if(remove.isConnected){armed=false;remove.textContent='删除';}},4000);return;}try{Backend.deleteGift(gift.day,gift.id);board=Backend.getBoard();refresh();toast('礼物已删除；发布后双方同步');render();}catch(error){toast(error.message);}};actions.appendChild(remove);}const reason=document.createElement('span');reason.className='adv-hint';reason.textContent=gift.edit_reason||'这是你投递的礼物';actions.appendChild(reason);detail.appendChild(actions);}
+          }catch(error){detail.replaceChildren();const message=document.createElement('p');message.className='adv-archive-locked';message.textContent=error.message;detail.appendChild(message);}
+          detail.hidden=false;toggle.setAttribute('aria-expanded','true');mark.textContent='▴';
+        };
+        item.appendChild(detail);details.appendChild(item);
+      }
+      main.appendChild(details);
+    }
+    if(!shown){const empty=document.createElement('p');empty.className='adv-archive-empty';empty.textContent='没有找到匹配的礼物，试试清空关键词或筛选条件。';main.appendChild(empty);}
+  }
+  render();
+}
+
 function openPostOffice() {
-  const {body}=openDeskSheet('圣诞邮局','Christmas post');const b=Backend.getBoard();const list=document.createElement('div');list.className='adv-post-list';
-  const favorites=Object.values(Backend.getCompanion().favorites||{});
-  const opened=(b.cells||[]).filter(c=>Object.keys(c.opened_by||{}).length);const newCount=(b.cells||[]).reduce((n,c)=>n+(c.new_count||0),0);
-  list.innerHTML=`<div class="adv-post-summary"><b>${newCount}</b><span>新礼物与追加</span><b>${opened.length}</b><span>已开启日期</span><b>${favorites.length}</b><span>收藏</span></div>`;
-  opened.forEach(c=>{const item=document.createElement('button');item.type='button';item.className='adv-post-item';item.innerHTML=`<span>${c.day} déc.</span><small>${c.new_count?`${c.new_count} 件未读追加`:'窗户已经点亮'}</small>`;item.onclick=()=>{closeMainOverlay();onWindowTap(c.day);};list.appendChild(item);});
-  if(favorites.length){const h=document.createElement('h3');h.textContent='收藏夹';list.appendChild(h);favorites.forEach(f=>{const p=document.createElement('p');p.className='adv-favorite-line';p.textContent=`★ ${f.day?`12月${f.day}日 · `:''}${f.id||'礼物'}`;list.appendChild(p);});}body.appendChild(list);
+  const {body,row,sheet}=openDeskSheet('圣诞邮局','Christmas post');sheet.classList.add('adv-post-office');
+  row.querySelector('.adv-btn').textContent='离开邮局';
+  let state={sender:'',day:'',event:'',type:'',search:'',from:'',to:''};let limit=30;
+  try{state={...state,...JSON.parse(sessionStorage.getItem('advent-v4-post-filters')||'null')};}catch{}
+  function render(){
+    const data=Backend.getBoard().post_office;body.replaceChildren();
+    const summary=document.createElement('div');summary.className='adv-post-summary';
+    const stats=[['累计投递',data.total_deliveries],['砚砚投递',data.yan_deliveries],['三三投递',data.san_deliveries],['近 7 天新增',data.recent_count],['未读活动',data.unread_count],['最近投递',data.latest?formatShanghai(data.latest.created_at):'暂无记录']];
+    for(const [label,value] of stats){const cell=document.createElement('div');const strong=document.createElement('b');strong.textContent=String(value);const span=document.createElement('span');span.textContent=label;cell.append(strong,span);summary.appendChild(cell);}body.appendChild(summary);
+    const tools=document.createElement('div');tools.className='adv-post-tools';const permission=document.createElement('span');permission.className='adv-hint';permission.textContent=data.permissions.label;const read=document.createElement('button');read.type='button';read.className='adv-btn';read.textContent='全部标为已读';read.disabled=!data.unread_count;read.onclick=()=>{Backend.markEventsRead(true);board=Backend.getBoard();refresh();render();};tools.append(permission,read);body.appendChild(tools);
+    const types=[...new Set(data.events.map(event=>event.gift_type))];
+    const fields=[{key:'sender',label:'发送者',options:[['','全部操作者'],['yan','砚砚'],['san','三三']]},{key:'day',label:'礼物日期',options:[['','全部日期'],...Array.from({length:25},(_,i)=>[String(i+1),`12月${i+1}日`])]},{key:'event',label:'活动类型',options:[['','全部活动'],...Object.entries(EVENT_TYPE_LABELS)]},{key:'type',label:'礼物类型',options:[['','全部类型'],...types.map(type=>[type,GIFT_TYPE_LABELS[type]||type])]},{key:'from',type:'date',label:'操作日期从'},{key:'to',type:'date',label:'操作日期到'},{key:'search',type:'search',label:'搜索标题或编号'}];
+    body.appendChild(filterToolbar(fields,state,'advent-v4-post-filters',()=>{limit=30;render();}));
+    const latest=document.createElement('section');latest.className='adv-post-latest';const latestTitle=document.createElement('b');latestTitle.textContent='最新记录';const latestText=document.createElement('span');latestText.textContent=data.latest?`${formatShanghai(data.latest.created_at)} · ${data.latest.actor_name}${EVENT_TYPE_LABELS[data.latest.event_type]}了「${data.latest.title||'一份礼物'}」`:'成功投递后，真实活动会出现在这里。历史礼物不会补造虚假记录。';latest.append(latestTitle,latestText);body.appendChild(latest);
+    const query=state.search.trim().toLowerCase();const events=data.events.filter(event=>{const operationDate=shanghaiDateKey(event.created_at);return (!state.sender||event.actor_id===state.sender)&&(!state.day||event.gift_date===Number(state.day))&&(!state.event||event.event_type===state.event)&&(!state.type||event.gift_type===state.type)&&(!state.from||operationDate>=state.from)&&(!state.to||operationDate<=state.to)&&(!query||`${event.title} ${event.gift_id} ${event.actor_name}`.toLowerCase().includes(query));});
+    const list=document.createElement('div');list.className='adv-post-list';const unreadIds=new Set(data.unread_ids||[]);
+    for(const event of events.slice(0,limit)){
+      const unread=unreadIds.has(event.event_id);
+      const button=document.createElement('button');button.type='button';button.className=`adv-post-event${unread?' is-unread':''}`;
+      const time=document.createElement('time');time.textContent=formatShanghai(event.created_at);const title=document.createElement('b');title.textContent=`${event.actor_name} · ${EVENT_TYPE_LABELS[event.event_type]||event.event_type}`;const detail=document.createElement('span');detail.textContent=`12月${event.gift_date}日 · ${GIFT_TYPE_LABELS[event.gift_type]||event.gift_type} · ${event.title||event.gift_id}`;button.append(time,title,detail);
+      button.onclick=()=>{Backend.markEventsRead(false,event.event_id);board=Backend.getBoard();refresh();openCollection('',event.gift_date);};list.appendChild(button);
+    }
+    if(!events.length){const empty=document.createElement('p');empty.className='adv-archive-empty';empty.textContent='没有符合条件的投递活动。';list.appendChild(empty);}body.appendChild(list);
+    if(events.length>limit){const more=document.createElement('button');more.type='button';more.className='adv-btn';more.textContent=`再加载 ${Math.min(30,events.length-limit)} 条`;more.onclick=()=>{limit+=30;render();};body.appendChild(more);}
+  }
+  render();
 }
 
 function openRecordPlayer() {
@@ -1368,8 +1486,19 @@ function renderHalf(container, gift, label) {
   return half;
 }
 
-/* ── 编辑器（三三追加礼物） ─────────────────────────────────────── */
-async function openEditor(defaultDay) {
+/* ── 编辑器（双方按 writer 身份追加礼物） ─────────────────────────── */
+async function openEditor(defaultDay, giftId = '') {
+  const writer = Backend.getWriter();
+  const writerName = writer === 'yan' ? '砚砚' : '三三';
+  const recipientName = writer === 'yan' ? '三三' : '砚砚';
+  let editing = null;
+  if (giftId) {
+    try { editing = Backend.getGiftForEdit(Number(defaultDay), giftId); }
+    catch (error) { toast(error.message); return; }
+  }
+  const existingItems = Array.isArray(editing?.items_v2) ? editing.items_v2 : [];
+  const existingPhoto = existingItems.find(item => item.type === 'photo')?.photo || null;
+  const preservedItems = existingItems.filter(item => !['text','song','image','photo','voice','attachment'].includes(item.type));
   const overlay = document.getElementById('overlay');
   overlay.innerHTML = '';
   overlay.style.display = 'flex';
@@ -1386,13 +1515,18 @@ async function openEditor(defaultDay) {
 
   const editorTop = document.createElement('div');
   editorTop.className = 'adv-ctop adv-editor-head';
-  editorTop.innerHTML = `<span class="d">藏一份礼物</span><span class="by">pour mon amour</span>`;
+  editorTop.innerHTML = `<span class="d">${editing ? '编辑这份礼物' : '藏一份礼物'}</span><span class="by">pour mon amour</span>`;
   frame.appendChild(editorTop);
 
   const editorIntro = document.createElement('p');
   editorIntro.className = 'adv-editor-intro';
-  editorIntro.textContent = '把今天突然想说的话，悄悄封进十二月的一扇窗。';
+  editorIntro.textContent = `${writerName}写给${recipientName}：把想说的话，悄悄封进十二月的一扇窗。`;
   frame.appendChild(editorIntro);
+
+  const titleLabel = document.createElement('span'); titleLabel.className = 'adv-lab adv-editor-title-label'; titleLabel.innerHTML = 'le titre <i>礼物标题</i>';
+  const titleIn = document.createElement('input'); titleIn.className = 'adv-in1'; titleIn.type = 'text'; titleIn.maxLength = 300; titleIn.placeholder = '给这份礼物一个容易认出的标题';
+  titleIn.value = editing?.title || '';
+  frame.append(titleLabel, titleIn);
 
   // 日期选择
   const dayLabel = document.createElement('span');
@@ -1404,7 +1538,10 @@ async function openEditor(defaultDay) {
   dayIn.className = 'adv-in1';
   dayIn.type = 'number';
   dayIn.min = 1;
-  dayIn.max = 25;
+  dayIn.max = 23;
+  const editorRules = Backend.calendarRules();
+  if (editorRules.minDay) dayIn.min = editorRules.minDay;
+  dayIn.disabled = Boolean(editing);
   // 默认日期按北京时间：12 月取当日，否则取 1（与解锁规则同源）
   const bj = Backend.shanghaiNowIso();
   dayIn.value = defaultDay || (bj.slice(5, 7) === '12' ? parseInt(bj.slice(8, 10), 10) : 1);
@@ -1414,13 +1551,13 @@ async function openEditor(defaultDay) {
   // 文字内容
   const textLabel = document.createElement('span');
   textLabel.className = 'adv-lab';
-  textLabel.innerHTML = 'le cadeau <i>写给砚砚的话</i>';
+  textLabel.innerHTML = `le cadeau <i>写给${recipientName}的话</i>`;
   frame.appendChild(textLabel);
 
   const textArea = document.createElement('textarea');
   textArea.className = 'adv-ta';
-  textArea.style.minHeight = '100px';
   textArea.placeholder = '文字内容（可选）';
+  textArea.value = existingItems.find(item => item.type === 'text')?.text || editing?.text || '';
   frame.appendChild(textArea);
 
   // Spotify 链接
@@ -1437,6 +1574,8 @@ async function openEditor(defaultDay) {
   urlIn.className = 'adv-in1';
   urlIn.type = 'url';
   urlIn.placeholder = 'https://open.spotify.com/track/… 或 https://music.163.com/song?id=…';
+  const existingSong = existingItems.find(item => item.type === 'song');
+  urlIn.value = existingSong?.url || '';
 
   const urlPreviewBtn = document.createElement('button');
   urlPreviewBtn.textContent = '预览';
@@ -1497,6 +1636,12 @@ async function openEditor(defaultDay) {
   urlPreview.style.display = 'none';
   frame.appendChild(urlPreview);
 
+  if (existingSong) {
+    nameIn.value = existingSong.name || editing?.song_name || '';
+    artistIn.value = existingSong.artist || '';
+    albumIn.value = existingSong.album || '';
+    coverIn.value = existingSong.cover || '';
+  }
   const musicInputs = { name: nameIn, artist: artistIn, album: albumIn, cover: coverIn };
   const autoMusicValues = {};
   const manualMusicFields = new Set();
@@ -1579,9 +1724,18 @@ async function openEditor(defaultDay) {
   imgPreviewWrap.className = 'adv-upload-preview';
   frame.appendChild(imgPreviewWrap);
 
-  let uploadedImageUrl = null;
+  let uploadedImageUrl = existingPhoto?.front?.url || existingItems.find(item => item.type === 'image')?.url || null;
   let previewObjectUrl = '';
   const photoOptions=document.createElement('div');photoOptions.className='adv-photo-editor-options';photoOptions.innerHTML='<label><input type="checkbox" id="asPhoto"> 作为可翻转照片</label><label>相纸边框<select id="photoFrame"><option value="polaroid">拍立得</option><option value="vintage">复古冲印</option><option value="plain">普通照片</option><option value="postcard">明信片</option><option value="stamp">邮票边框</option></select></label><label>显示方式<select id="photoFit"><option value="cover">填满裁切</option><option value="contain">完整显示</option></select></label><label>横向焦点 <input id="photoX" type="range" min="0" max="100" value="50"></label><label>纵向焦点 <input id="photoY" type="range" min="0" max="100" value="50"></label><input id="photoTitle" class="adv-in1" type="text" maxlength="200" placeholder="照片正面小标题（可选）"><textarea id="photoBack" class="adv-ta" placeholder="照片背面的故事、日期或签名"></textarea><div class="adv-photo-live" id="photoLive"></div>';
+  if (existingPhoto) {
+    photoOptions.querySelector('#asPhoto').checked = true;
+    photoOptions.querySelector('#photoFrame').value = existingPhoto.front.frame || 'polaroid';
+    photoOptions.querySelector('#photoFit').value = existingPhoto.front.fit || 'cover';
+    photoOptions.querySelector('#photoX').value = existingPhoto.front.positionX ?? 50;
+    photoOptions.querySelector('#photoY').value = existingPhoto.front.positionY ?? 50;
+    photoOptions.querySelector('#photoTitle').value = existingPhoto.front.title || '';
+    photoOptions.querySelector('#photoBack').value = existingPhoto.back.text || '';
+  }
   frame.appendChild(photoOptions);
   const currentPhoto = () => ({
     front: {
@@ -1591,7 +1745,7 @@ async function openEditor(defaultDay) {
       positionY: +photoOptions.querySelector('#photoY').value,
       title: photoOptions.querySelector('#photoTitle').value,
     },
-    back: { text: photoOptions.querySelector('#photoBack').value, date: '', signature: '' },
+    back: { text: photoOptions.querySelector('#photoBack').value, date: existingPhoto?.back?.date || '', signature: existingPhoto?.back?.signature || '' },
   });
   function updatePhotoPreview() {
     const live = photoOptions.querySelector('#photoLive');
@@ -1635,7 +1789,9 @@ async function openEditor(defaultDay) {
   attachmentIn.type = 'file';
   attachmentIn.accept = '.pdf,.mid,.midi,.musicxml,application/pdf,audio/midi,application/vnd.recordare.musicxml+xml';
   frame.appendChild(attachmentIn);
-  let uploadedAttachment = null;
+  const attachmentInfo = document.createElement('div'); attachmentInfo.className = 'adv-attachment-info'; frame.appendChild(attachmentInfo);
+  let uploadedAttachment = existingItems.find(item => item.type === 'attachment') || null;
+  if (uploadedAttachment) attachmentInfo.textContent = `已保留附件：${uploadedAttachment.name || uploadedAttachment.filename || '附件'}`;
   attachmentIn.onchange = async () => {
     const file = attachmentIn.files?.[0];
     if (!file) return;
@@ -1646,6 +1802,7 @@ async function openEditor(defaultDay) {
     try {
       const res = await Backend.uploadFile(file);
       uploadedAttachment = { type: 'attachment', url: res.url, name: file.name, mime: mimeByExt[ext] };
+      attachmentInfo.textContent = `已暂存附件：${file.name}`;
     } catch (e) { toast('附件上传失败：' + e.message); }
   };
 
@@ -1673,7 +1830,8 @@ async function openEditor(defaultDay) {
   let mediaRecorder = null;
   let recChunks = [];
   let recUrl = null;
-  let recUploadUrl = null;
+  let recUploadUrl = existingItems.find(item => item.type === 'voice')?.url || null;
+  if (recUploadUrl) recStatus.textContent = '已保留原有语音';
 
   recBtn.onclick = async () => {
     if (mediaRecorder && mediaRecorder.state === 'recording') {
@@ -1717,7 +1875,7 @@ async function openEditor(defaultDay) {
   makeGroup('信与日期', '文字是礼物的主角', [dayLabel, dayIn, textLabel, textArea], true);
   makeGroup('一首歌', '公开元数据自动识别，手填优先', [spLabel, urlRow, musicMetaRow, albumIn, coverIn, musicStatus, urlPreview]);
   makeGroup('照片与相纸', '五种边框与裁切焦点实时预览', [imgLabel, imgIn, imgPreviewWrap, photoOptions]);
-  makeGroup('附件与声音', 'PDF、MIDI、MusicXML 与录音', [attachmentLabel, attachmentIn, recLabel, recRow]);
+  makeGroup('附件与声音', 'PDF、MIDI、MusicXML 与录音', [attachmentLabel, attachmentIn, attachmentInfo, recLabel, recRow]);
 
   // 操作行
   const msgSpan = document.createElement('span');
@@ -1730,7 +1888,7 @@ async function openEditor(defaultDay) {
 
   // 从当前编辑器内容构造 items，供「封好」与「预览对方视角」共用。
   function collectItems() {
-    const items = [];
+    const items = [...preservedItems];
     const bodyText = textArea.value.trim();
     if (bodyText) items.push({ type: 'text', text: bodyText });
 
@@ -1770,7 +1928,8 @@ async function openEditor(defaultDay) {
 
   const saveBtn = document.createElement('button');
   saveBtn.className = 'adv-btn solid';
-  saveBtn.textContent = '封好礼盒';
+  saveBtn.textContent = editorRules.canCreate ? '封好礼盒' : '当前阶段只读';
+  saveBtn.disabled = !editorRules.canCreate;
   saveBtn.onclick = async () => {
     const day = parseInt(dayIn.value);
     if (!day || day < 1 || day > 25) { msgSpan.textContent = '日期要在 1—25 之间'; return; }
@@ -1785,12 +1944,14 @@ async function openEditor(defaultDay) {
       const collected = collectItems();
       if (collected.error) { msgSpan.textContent = collected.error; saveBtn.disabled = false; return; }
       if (!collected.items?.length) { msgSpan.textContent = '写点什么再封好~'; saveBtn.disabled = false; return; }
-      Backend.hide(day, collected.items, collected.items.some(i => i.type === 'song') ? 'chanson' : 'lettre');
+      const options = { title: titleIn.value.trim(), icon: collected.items.some(i => i.type === 'song') ? 'chanson' : 'lettre' };
+      if (editing) Backend.updateGift(day, giftId, collected.items, options);
+      else Backend.hide(day, collected.items, options.icon, options);
       board = Backend.getBoard();
       refresh();
       editorDirty = false;
       try { localStorage.removeItem(draftKey); } catch {}
-      toast(`12月${day}日又多了一份礼物 ♥`);
+      toast(editing ? '礼物已更新，发布后双方同步' : `12月${day}日又多了一份礼物 ♥`);
       closeOverlay(true);
     } catch (e) {
       msgSpan.textContent = e.message;
@@ -1806,14 +1967,17 @@ async function openEditor(defaultDay) {
   row.appendChild(saveBtn);
   frame.appendChild(row);
 
+  const editorScroll = document.createElement('div'); editorScroll.className = 'adv-editor-scroll';
+  for (const child of [...frame.children]) if (child !== editorTop && child !== row) editorScroll.appendChild(child);
+  frame.insertBefore(editorScroll, row);
   sheet.appendChild(frame);
   overlay.appendChild(sheet);
   // 草稿只存在本地，按身份/日期隔离；不会进入 Backend.hide 或 GitHub 同步。
-  const draftKey = `advent-v4-draft:${Backend.getWho()}:${dayIn.value || 'new'}`;
+  const draftKey = editing ? `advent-v4-edit:${writer}:${giftId}` : `advent-v4-draft:${writer}:${dayIn.value || 'new'}`;
   const draftFields = [...sheet.querySelectorAll('input:not([type=file]), select, textarea')];
   const fieldKeys = draftFields.map((el, i) => el.id || el.name || `${el.tagName.toLowerCase()}:${i}`);
   let restoredDraft = null;
-  try { restoredDraft = JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch { /* ignore malformed local draft */ }
+  try { restoredDraft = editing ? null : JSON.parse(localStorage.getItem(draftKey) || 'null'); } catch { /* ignore malformed local draft */ }
   if (restoredDraft?.values) {
     draftFields.forEach((el, i) => {
       const key = fieldKeys[i];
@@ -1822,9 +1986,11 @@ async function openEditor(defaultDay) {
       if (el.type === 'checkbox') el.checked = Boolean(value); else el.value = value;
     });
   }
-  uploadedImageUrl = restoredDraft?.assets?.image || '';
-  uploadedAttachment = restoredDraft?.assets?.attachment || null;
-  recUploadUrl = restoredDraft?.assets?.voice || '';
+  if (!editing) {
+    uploadedImageUrl = restoredDraft?.assets?.image || '';
+    uploadedAttachment = restoredDraft?.assets?.attachment || null;
+    recUploadUrl = restoredDraft?.assets?.voice || '';
+  }
   const restoredAutoFields = new Set(restoredDraft?.auto_music || []);
   for (const [field, input] of Object.entries(musicInputs)) {
     if (restoredAutoFields.has(field) && input.value) autoMusicValues[field] = input.value;
@@ -2083,6 +2249,8 @@ function kindToIcon(kind) {
 /* ── 暴露给 HTML inline onclick ─────────────────────────────────── */
 window.UI = {
   openEditor,
+  openCollection,
+  openPostOffice,
   openScrapbook,
   syncNow: syncRemote,
   showArchive,
@@ -2098,12 +2266,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   const deskWrite = document.getElementById('deskWrite');
   const deskDiary = document.getElementById('deskDiary');
   const deskMail = document.getElementById('deskMail');
+  const deskCollection = document.getElementById('deskCollection');
+  const yanGiftPile = document.getElementById('yanGiftPile');
+  const sanGiftPile = document.getElementById('sanGiftPile');
   const deskPhoto = document.getElementById('deskPhoto');
   const deskNote = document.getElementById('deskNote');
   const deskRecord = document.getElementById('deskRecord');
   if (deskWrite) deskWrite.onclick = () => UI.openEditor();
   if (deskDiary) deskDiary.onclick = () => openScrapbook();
   if (deskMail) deskMail.onclick = () => openPostOffice();
+  if (deskCollection) deskCollection.onclick = () => openCollection();
+  if (yanGiftPile) yanGiftPile.onclick = () => openCollection('yan');
+  if (sanGiftPile) sanGiftPile.onclick = () => openCollection('san');
   if (deskPhoto) deskPhoto.onclick = () => openPhotoFrame();
   if (deskNote) deskNote.onclick = () => openTodayNote();
   if (deskRecord) deskRecord.onclick = () => openRecordPlayer();
@@ -2117,6 +2291,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       toast(Backend.getWho() === 'yan' ? '泡芙会把她提前开窗的事记在砚砚名下' : '泡芙会把你提前开窗的事记在三三名下');
     };
   }
+  const writerBtn = document.getElementById('writerBtn');
+  if (writerBtn) writerBtn.onclick = () => {
+    const url = new URL(location.href);
+    if (Backend.getWriter() === 'yan') url.searchParams.delete('writer'); else url.searchParams.set('writer', 'yan');
+    location.assign(url);
+  };
   // 显示模式：自动 → 白昼 → 夜间 → 自动 循环
   const displayBtn = document.getElementById('displayBtn');
   if (displayBtn) {

@@ -6,9 +6,9 @@
 <title>砚砚 × 三三 · 双人降临历</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&family=Pinyon+Script&family=Noto+Serif+SC:wght@400&display=swap">
-<link rel="stylesheet" href="advent.css?v=8.1.0">
-<link rel="stylesheet" href="music.css?v=8.1.0">
-<link rel="stylesheet" href="vendor/abcjs-audio.css?v=8.1.0">
+<link rel="stylesheet" href="advent.css?v=8.2.0">
+<link rel="stylesheet" href="music.css?v=8.2.0">
+<link rel="stylesheet" href="vendor/abcjs-audio.css?v=8.2.0">
 <style>
   /* 顶栏 */
   .adv-topbar {
@@ -18,6 +18,7 @@
     min-height: 28px;
     margin-bottom: 2px;
   }
+  .adv-wrap > .adv-topbar { position: relative; z-index: 10; }
   .adv-topbar .adv-stars { color: var(--adv-gold); font-size: 13px; }
 
   /* 底部操作区 */
@@ -76,10 +77,11 @@
     </div>
     <div class="adv-topbar" style="min-height:0;margin-bottom:0">
       <span style="display:flex;gap:6px">
-        <button class="adv-pill" id="displayBtn" style="font-size:11px;padding:2px 9px;min-height:0" title="切换显示模式：自动 / 白昼 / 夜间">☾ 自动</button>
-        <button class="adv-pill" id="smoothBtn" style="font-size:11px;padding:2px 9px;min-height:0" title="流畅模式：减少动画与特效，保留全部美术">⚡ 流畅 · 关</button>
+        <button class="adv-pill" id="displayBtn" style="font-size:11px;padding:4px 10px;min-height:36px" title="切换显示模式：自动 / 白昼 / 夜间">☾ 自动</button>
+        <button class="adv-pill" id="smoothBtn" style="font-size:11px;padding:4px 10px;min-height:36px" title="流畅模式：减少动画与特效，保留全部美术">⚡ 流畅 · 关</button>
       </span>
-      <button class="adv-pill" id="whoBtn" style="font-size:11px;padding:2px 10px;min-height:0">偷看记名：三三</button>
+      <button class="adv-pill" id="whoBtn" style="font-size:11px;padding:4px 10px;min-height:36px">偷看记名：三三</button>
+      <button class="adv-pill" id="writerBtn" type="button" style="font-size:11px;padding:4px 10px;min-height:36px" title="切换写礼物身份；不会改变偷看记名">写礼物：三三</button>
     </div>
 
     <!-- 标题 -->
@@ -105,20 +107,21 @@
       <section class="adv-gift-stats" aria-label="双方礼物统计">
         <div class="adv-desk-section-head"><span>Our little gifts</span><small id="giftStatsStatus">正在核对礼物堆…</small></div>
         <div class="adv-gift-piles">
-          <article class="adv-gift-pile adv-gift-pile-yan" aria-label="砚砚藏入的礼物">
-            <div class="adv-pile-scene" aria-hidden="true"><span class="adv-pile-star">✦</span><span class="adv-pile-sprig">❧</span><div class="adv-pile-boxes"></div><span class="adv-pile-ground"></span></div>
-            <div class="adv-pile-caption"><span>砚砚的礼物堆</span><b id="yanGiftCount">—</b></div>
-          </article>
-          <article class="adv-gift-pile adv-gift-pile-san" aria-label="三三藏入的礼物">
-            <div class="adv-pile-scene" aria-hidden="true"><span class="adv-pile-star">✧</span><span class="adv-pile-sprig">❧</span><div class="adv-pile-boxes"></div><span class="adv-pile-ground"></span></div>
-            <div class="adv-pile-caption"><span>三三的礼物堆</span><b id="sanGiftCount">—</b></div>
-          </article>
+          <button class="adv-gift-pile adv-gift-pile-yan" id="yanGiftPile" type="button" aria-label="查看砚砚的礼物">
+            <span class="adv-pile-scene" aria-hidden="true"><span class="adv-pile-star">✦</span><span class="adv-pile-sprig">❧</span><span class="adv-pile-boxes"></span><span class="adv-pile-ground"></span></span>
+            <span class="adv-pile-caption"><span>砚砚的礼物堆</span><b id="yanGiftCount">—</b></span>
+          </button>
+          <button class="adv-gift-pile adv-gift-pile-san" id="sanGiftPile" type="button" aria-label="查看三三的礼物">
+            <span class="adv-pile-scene" aria-hidden="true"><span class="adv-pile-star">✧</span><span class="adv-pile-sprig">❧</span><span class="adv-pile-boxes"></span><span class="adv-pile-ground"></span></span>
+            <span class="adv-pile-caption"><span>三三的礼物堆</span><b id="sanGiftCount">—</b></span>
+          </button>
         </div>
         <div class="adv-gift-summary" id="giftSummary" aria-live="polite"></div>
       </section>
 
       <section class="adv-desk-tools" aria-label="常用功能">
-        <button class="adv-desk-object adv-mail" id="deskMail" type="button"><span class="adv-object-mark">✉</span><b>圣诞邮局</b><small id="deskMailStatus">等待新信件</small></button>
+        <button class="adv-desk-object adv-collection-object" id="deskCollection" type="button"><span class="adv-object-mark">▤</span><b>礼物收藏馆</b><small>按日期与类型翻阅</small></button>
+        <button class="adv-desk-object adv-mail adv-desk-mail" id="deskMail" type="button"><span class="adv-object-mark">✉</span><b>圣诞邮局</b><small id="deskMailStatus">等待新信件</small><small class="adv-desk-mail-latest" id="deskMailLatest">暂无投递活动</small></button>
         <button class="adv-desk-object adv-frame-object" id="deskPhoto" type="button"><span class="adv-object-photo">♡</span><b>桌面相框</b><small>翻看我们的照片</small></button>
         <button class="adv-desk-object adv-note-object" id="deskNote" type="button"><span class="adv-object-mark">✎</span><b>今日便签</b><small>留一句冬日的话</small></button>
         <button class="adv-desk-object adv-record" id="deskRecord" type="button"><span class="adv-object-mark">♫</span><b>圣诞唱片机</b><small id="deskRecordStatus">点击播放背景音乐</small></button>
@@ -167,8 +170,8 @@
 <div class="adv-toast" id="toast" aria-live="polite"></div>
 
 <!-- 脚本：顺序很重要 -->
-<script src="house.js?v=8.1.0" type="module"></script>
-<script src="music.js?v=8.1.0"></script>
-<script src="app.js?v=8.1.0" type="module"></script>
+<script src="house.js?v=8.2.0" type="module"></script>
+<script src="music.js?v=8.2.0"></script>
+<script src="app.js?v=8.2.0" type="module"></script>
 </body>
 </html>

@@ -20,8 +20,8 @@
  *   - 解锁规则是客户端交互层限制（与原版本机运行一致），并非服务器端安全边界
  */
 
-import { CONFIG, UPLOAD_MIME_EXT, REMOTE_MEDIA_EXTENSIONS, MAX_UPLOAD_BYTES } from './config.js?v=8.1.0';
-import { BUILTIN_DAYS, BUILTIN_STATS } from './builtin-gifts.js?v=8.1.0';
+import { CONFIG, UPLOAD_MIME_EXT, REMOTE_MEDIA_EXTENSIONS, MAX_UPLOAD_BYTES } from './config.js?v=8.2.0';
+import { BUILTIN_DAYS, BUILTIN_STATS } from './builtin-gifts.js?v=8.2.0';
 
 /* ── 编解码工具（与 advent-gifts-v3.2 协议一致）────────────────────── */
 
@@ -147,14 +147,50 @@ function todayDay() {
   return 0;
 }
 
-function isPrepPeriod() {
-  const p = shanghaiParts();
-  const y = parseInt(p.year, 10), m = parseInt(p.month, 10), d = parseInt(p.day, 10);
-  if (y < CONFIG.YEAR) return true;
-  if (y > CONFIG.YEAR) return false;
-  if (m < 12) return true;
-  if (m > 12) return false;
-  return d === 1 && (p.hour < '23' || (p.hour === '23' && p.minute <= '59')); // 11-30 23:59:59 之前
+function shanghaiCalendar(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: CONFIG.TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now);
+  const value = {};
+  for (const part of parts) value[part.type] = parseInt(part.value, 10);
+  return { year: value.year, month: value.month, day: value.day, stamp: `${value.year}${String(value.month).padStart(2, '0')}${String(value.day).padStart(2, '0')}` };
+}
+
+function isPrepPeriod(now = new Date()) {
+  return shanghaiCalendar(now).stamp < `${CONFIG.YEAR}1201`;
+}
+
+function isArchivePhase(now = new Date()) {
+  return shanghaiCalendar(now).stamp >= `${CONFIG.YEAR}1226`;
+}
+
+function calendarRules(now = new Date()) {
+  const date = shanghaiCalendar(now);
+  if (isArchivePhase(now)) return { phase: 'archive', canCreate: false, minDay: null, maxDay: null, label: '完整档案 · 只读' };
+  if (isPrepPeriod(now)) return { phase: 'prep', canCreate: true, minDay: 1, maxDay: 23, label: '正式封箱前 · 可整理 1—23 日礼物' };
+  if (date.year === CONFIG.YEAR && date.month === 12 && date.day <= 23) {
+    return { phase: 'advent', canCreate: true, minDay: date.day, maxDay: 23, label: `可追加与修改 ${date.day}—23 日礼物` };
+  }
+  return { phase: 'ending', canCreate: false, minDay: null, maxDay: null, label: '圣诞特别结局 · 普通礼物只读' };
+}
+
+function canCreateGift(day, now = new Date()) {
+  const rules = calendarRules(now);
+  return { ok: Boolean(rules.canCreate && Number.isInteger(day) && day >= rules.minDay && day <= rules.maxDay), reason: rules.label, rules };
+}
+
+function canMutateGift(day, entry, now = new Date()) {
+  if (!Number.isInteger(day) || day < 1 || day > 23) return { ok: false, reason: '24、25 日保留圣诞特别结局，普通礼物不可改写' };
+  if (isArchivePhase(now)) return { ok: false, reason: '12月26日起完整档案只读' };
+  if (!entry) return { ok: false, reason: '找不到这份礼物' };
+  if (entry.sealed === true) return { ok: false, reason: '礼物已经正式封存' };
+  if (!isPrepPeriod(now) && day < shanghaiCalendar(now).day) return { ok: false, reason: '过去日期的礼物已经自动锁定' };
+  return { ok: true, reason: '' };
+}
+
+function assertCanCreate(day) {
+  const permission = canCreateGift(day);
+  if (!permission.ok) throw new Error(permission.reason);
 }
 
 /* ── 本地存档（localStorage，结构与原版 save.json 一致）────────────── */
@@ -166,13 +202,19 @@ const PAT_REMEMBER_KEY = 'advent-gh-pat-remembered';
 let cachedGiftStats = null;
 
 const DEFAULT_SAVE = {
-  version: 3,
+  version: 4,
   opened: [],
   opened_at: {},
   peek_counts: { san: 0, yan: 0 },
   peek_log: [],
   answers: {},
   human_gifts: {},
+  yan_gifts: {},
+  deleted_ids: [],
+  deleted_records: [],
+  yan_deleted_ids: [],
+  yan_deleted_records: [],
+  gift_events: { version: 1, events: [], read_cursors: { san: '', yan: '' }, read_event_ids: { san: [], yan: [] } },
   seen_remote_ids: [],
   yanyan_freeze: null,
   scores: {},
@@ -181,7 +223,7 @@ const DEFAULT_SAVE = {
   settings: { name: '三三', companion: '砚砚', music: true, who: 'san', display: 'auto', smooth: false },
 };
 
-let save = loadSave();
+let save;
 let remoteData = { yan: { days: {} }, san: { days: {} } };
 let remoteIndexes = { yan: { days: {} }, san: { days: {} } };
 let syncState = { state: 'idle', message: '尚未同步', sources: {} };
@@ -195,11 +237,27 @@ function loadSave() {
       if (k === 'peek_counts' || k === 'settings' || k === 'companion') Object.assign(merged[k], v || {});
       else merged[k] = v;
     }
-    for (const [day, gift] of Object.entries(merged.human_gifts)) {
-      if (gift && !Array.isArray(gift)) merged.human_gifts[day] = [gift];
+    for (const key of ['human_gifts', 'yan_gifts']) {
+      merged[key] ||= {};
+      for (const [day, gift] of Object.entries(merged[key])) {
+        if (gift && !Array.isArray(gift)) merged[key][day] = [gift];
+      }
     }
     merged.peek_log = mergePeekEvents([], merged.peek_log || []);
     merged.peek_counts = peekCounts(merged.peek_log);
+    merged.gift_events ||= { version: 1, events: [], read_cursors: { san: '', yan: '' } };
+    merged.gift_events.events = mergeGiftEvents([], merged.gift_events.events);
+    merged.gift_events.read_cursors ||= { san: '', yan: '' };
+    const legacyReadIds = Array.isArray(merged.gift_events.read_event_ids) ? merged.gift_events.read_event_ids : [];
+    const rawReadIds = merged.gift_events.read_event_ids;
+    merged.gift_events.read_event_ids = {
+      san: cleanReadEventIds(rawReadIds?.san ?? legacyReadIds),
+      yan: cleanReadEventIds(rawReadIds?.yan ?? legacyReadIds),
+    };
+    merged.deleted_ids = [...new Set((merged.deleted_ids || []).map(id => String(id).slice(0, 160)).filter(Boolean))];
+    merged.yan_deleted_ids = [...new Set((merged.yan_deleted_ids || []).map(id => String(id).slice(0, 160)).filter(Boolean))];
+    merged.deleted_records = (merged.deleted_records || []).filter(record => Number.isInteger(record?.day) && record?.day >= 1 && record?.day <= 25).map(record => ({ id: String(record.id).slice(0, 160), day: record.day }));
+    merged.yan_deleted_records = (merged.yan_deleted_records || []).filter(record => Number.isInteger(record?.day) && record?.day >= 1 && record?.day <= 25).map(record => ({ id: String(record.id).slice(0, 160), day: record.day }));
     return merged;
   } catch {
     return structuredClone(DEFAULT_SAVE);
@@ -332,6 +390,10 @@ function normalizeEntry(entry, fallbackId, { allowLocal = true } = {}) {
     items_v2: items,
     created_at: created,
     at: created,
+    updated_at: String(entry.updated_at || created).slice(0, 80),
+    recipient: String(entry.recipient || (String(entry.from || '').includes('三三') ? '砚砚' : '三三')).slice(0, 80),
+    published: entry.published === true,
+    sealed: entry.sealed === true,
   };
   // V4 可选字段：只做浅层安全保留，旧协议字段和未知字段不被覆盖。
   for (const key of ['paper', 'stickers', 'photo', 'comic', 'reply_to', 'favorite', 'editor_version']) {
@@ -357,6 +419,88 @@ function normalizeDays(value, { allowLocal = false } = {}) {
   }
   return { days: result };
 }
+
+/* ── 礼物活动事件（只存安全元数据，与礼物主数据分离）────────────── */
+
+const GIFT_EVENT_TYPES = new Set(['create', 'update', 'delete', 'attachment', 'open', 'seal']);
+function normalizeGiftEvent(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const day = parseInt(raw.gift_date, 10);
+  const type = String(raw.event_type || '');
+  const at = String(raw.created_at || '');
+  const id = String(raw.event_id || '');
+  const actor = String(raw.actor_id || '');
+  const giftId = String(raw.gift_id || '');
+  if (!GIFT_EVENT_TYPES.has(type) || !['san', 'yan'].includes(actor) || !Number.isInteger(day) || day < 1 || day > 25 || !id || !giftId || Number.isNaN(Date.parse(at))) return null;
+  return {
+    event_id: id.slice(0, 180), actor_id: actor,
+    actor_name: String(raw.actor_name || (actor === 'yan' ? '砚砚' : '三三')).slice(0, 80),
+    event_type: type, gift_id: giftId.slice(0, 160), gift_date: day,
+    gift_type: String(raw.gift_type || 'gift').slice(0, 40),
+    title: String(raw.title || '').slice(0, 300), created_at: at.slice(0, 80),
+  };
+}
+
+export function mergeGiftEvents(...groups) {
+  const byId = new Map();
+  for (const group of groups) {
+    const events = Array.isArray(group) ? group : (Array.isArray(group?.events) ? group.events : []);
+    for (const raw of events) {
+      const event = normalizeGiftEvent(raw);
+      if (event && !byId.has(event.event_id)) byId.set(event.event_id, event);
+    }
+  }
+  return [...byId.values()].sort((a, b) =>
+    Date.parse(a.created_at) - Date.parse(b.created_at) || a.event_id.localeCompare(b.event_id));
+}
+
+function cleanReadEventIds(value) {
+  return [...new Set((Array.isArray(value) ? value : []).map(id => String(id).slice(0, 180)).filter(Boolean))];
+}
+
+function giftType(entry) {
+  const types = (entry?.items_v2 || entry?.items || []).map(item => item?.type).filter(Boolean);
+  return types[0] || entry?.kind || 'gift';
+}
+
+function addGiftEvent(eventType, entry, day, extra = {}) {
+  const at = shanghaiNowIso();
+  const actor = getWriter();
+  const id = `giftevt-${(crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`).replace(/-/g, '')}`;
+  const event = normalizeGiftEvent({
+    event_id: id, actor_id: actor, actor_name: actor === 'yan' ? '砚砚' : '三三',
+    event_type: eventType, gift_id: entry.id, gift_date: day,
+    gift_type: extra.gift_type || giftType(entry), title: entry.title || `12月${day}日的礼物`, created_at: at,
+    ...extra,
+  });
+  if (!event) throw new Error('活动记录格式无效');
+  save.gift_events.events = mergeGiftEvents(save.gift_events.events, [event]);
+  persist();
+  return event;
+}
+
+function eventStore() {
+  return {
+    version: 1, updated_at: shanghaiNowIso(), events: mergeGiftEvents(save.gift_events.events),
+    read_cursors: { ...save.gift_events.read_cursors },
+    read_event_ids: { san: cleanReadEventIds(save.gift_events.read_event_ids.san), yan: cleanReadEventIds(save.gift_events.read_event_ids.yan) },
+  };
+}
+
+function markEventsRead(all = false, eventId = '') {
+  const who = getWriter();
+  if (eventId) save.gift_events.read_event_ids[who] = cleanReadEventIds([...save.gift_events.read_event_ids[who], String(eventId).slice(0, 180)]);
+  if (all) {
+    const incoming = save.gift_events.events.filter(event => event.actor_id !== who);
+    save.gift_events.read_event_ids[who] = cleanReadEventIds([...save.gift_events.read_event_ids[who], ...incoming.map(event => event.event_id)]);
+    const cursor = incoming.length ? incoming[incoming.length - 1].created_at : shanghaiNowIso();
+    save.gift_events.read_cursors[who] = [save.gift_events.read_cursors[who] || '', cursor].sort().pop();
+  }
+  persist();
+  return { ok: true, read_at: save.gift_events.read_cursors[who] };
+}
+
+save = loadSave();
 
 /* ── 偷看事件（与 v3.2 协议一致）──────────────────────────────────── */
 
@@ -450,11 +594,13 @@ function enforceYanyanFreeze(decoded) {
   const freeze = save.yanyan_freeze;
   if (!freeze) return decoded;
   const baseline = new Set(freeze.gift_ids || []);
+  const localIds = new Set(Object.values(save.yan_gifts || {}).flat().map(entry => entry.id));
+  const createdIds = new Set(save.gift_events.events.filter(event => event.actor_id === 'yan' && event.event_type === 'create').map(event => event.gift_id));
   const output = { days: {} };
   for (const [day, entries] of Object.entries(decoded.days)) {
     const accepted = [];
     for (const entry of entries) {
-      if (baseline.has(entry.id)) { accepted.push(entry); continue; }
+      if (baseline.has(entry.id) || localIds.has(entry.id) || createdIds.has(entry.id)) { accepted.push(entry); continue; }
       try {
         let created = new Date(entry.created_at || entry.at || '');
         if (isNaN(created.getTime())) continue;
@@ -463,13 +609,17 @@ function enforceYanyanFreeze(decoded) {
           timeZone: CONFIG.TZ, year: 'numeric', month: '2-digit', day: '2-digit', hour12: false,
         }).formatToParts(created).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
         const cy = parseInt(fmt.year, 10), cm = parseInt(fmt.month, 10), cd = parseInt(fmt.day, 10);
-        if (cy === CONFIG.YEAR && cm === 12 && cd >= 1 && cd <= 23 && cd === parseInt(day, 10)) {
+        const createdInPrep = created.getTime() < Date.parse(`${CONFIG.YEAR}-12-01T00:00:00+08:00`);
+        if (createdInPrep || (cy === CONFIG.YEAR && cm === 12 && cd >= 1 && cd <= 23 && cd <= parseInt(day, 10))) {
           accepted.push(entry);
+          freeze.gift_ids.push(entry.id);
         }
       } catch { /* 无效时间戳：拒绝 */ }
     }
     if (accepted.length) output.days[day] = accepted;
   }
+  freeze.gift_ids = [...new Set(freeze.gift_ids || [])];
+  persist();
   return output;
 }
 
@@ -539,6 +689,7 @@ function writeRemoteCache() {
       yan: remoteData.yan, san: remoteData.san,
       yanIndex: remoteIndexes.yan, sanIndex: remoteIndexes.san,
       giftStats: cachedGiftStats,
+      giftEvents: save.gift_events,
       fetched_at: shanghaiNowIso(),
     }));
   } catch { /* 缓存失败不影响主流程 */ }
@@ -580,6 +731,12 @@ function syncAll() {
         if (who === 'yan') {
           await recordYanyanFreeze(wrapper, decoded);
           decoded = enforceYanyanFreeze(decoded);
+          const deleted = new Set(save.yan_deleted_ids || []);
+          for (const [day, entries] of Object.entries(decoded.days)) decoded.days[day] = entries.filter(entry => !deleted.has(entry.id));
+        }
+        if (who === 'san') {
+          const deleted = new Set(save.deleted_ids || []);
+          for (const [day, entries] of Object.entries(decoded.days)) decoded.days[day] = entries.filter(entry => !deleted.has(entry.id));
         }
         remoteData[who] = decoded;
         sources[name] = { state: 'succeeded', count: Object.values(decoded.days).reduce((n, x) => n + x.length, 0) };
@@ -612,6 +769,21 @@ function syncAll() {
     try {
       const wrapper=await fetchRemoteFile('companion_state.json');const remote=decodeRaw(wrapper.payload,SAN_DIGEST);mergeCompanionState(remote);sources.companion_state={state:'succeeded'};ok++;
     } catch(e){fail('companion_state',e);}
+
+    try {
+      const remote = await fetchRemoteFile('gift_events.json');
+      save.gift_events.events = mergeGiftEvents(save.gift_events.events, remote);
+      const remoteReadIds = remote?.read_event_ids;
+      const legacyRemoteReadIds = Array.isArray(remoteReadIds) ? remoteReadIds : [];
+      for (const who of ['san', 'yan']) {
+        save.gift_events.read_event_ids[who] = cleanReadEventIds([...save.gift_events.read_event_ids[who], ...(remoteReadIds?.[who] ?? legacyRemoteReadIds)]);
+        const incoming = String(remote?.read_cursors?.[who] || '');
+        if (incoming > (save.gift_events.read_cursors[who] || '')) save.gift_events.read_cursors[who] = incoming;
+      }
+      persist();
+      sources.gift_events = { state: 'succeeded', count: save.gift_events.events.length };
+      ok++;
+    } catch(e){fail('gift_events',e);}
 
     // 统计：成功 / 预期为空 / 缓存回退 / 真正失败
     const entries = Object.values(sources);
@@ -677,11 +849,13 @@ function normalizeIndex(raw, author) {
 function summarizeGiftStats() {
   const opened = new Set(save.opened.map(Number));
   const summarize = (author) => {
+    const info = writerInfo(author);
+    const deleted = new Set(save[info.deletedKey] || []);
     const published = new Map();
     const add = (entry, day) => {
       const id = String(entry?.id || '').slice(0, 160);
       const dayNumber = Number(day);
-      if (id && Number.isInteger(dayNumber) && dayNumber >= 1 && dayNumber <= 25 && !published.has(id)) {
+      if (id && !deleted.has(id) && Number.isInteger(dayNumber) && dayNumber >= 1 && dayNumber <= 25 && !published.has(id)) {
         published.set(id, { id, day: dayNumber });
       }
     };
@@ -697,15 +871,13 @@ function summarizeGiftStats() {
       for (const entry of entries || []) add(entry, day);
     }
     let local = 0;
-    if (author === 'san') {
-      const localIds = new Set();
-      for (const [day, entries] of Object.entries(save.human_gifts || {})) {
-        for (const entry of entries || []) {
-          const id = String(entry?.id || '').slice(0, 160);
-          if (entry?.published === true || !id || published.has(id) || localIds.has(id)) continue;
-          localIds.add(id);
-          local++;
-        }
+    const localIds = new Set();
+    for (const [day, entries] of Object.entries(save[info.giftsKey] || {})) {
+      for (const entry of entries || []) {
+        const id = String(entry?.id || '').slice(0, 160);
+        if (entry?.published === true || !id || deleted.has(id) || published.has(id) || localIds.has(id)) continue;
+        localIds.add(id);
+        local++;
       }
     }
     let revealed = 0;
@@ -738,8 +910,95 @@ function summarizeGiftStats() {
     total: known ? yan.total + san.total : 0,
     revealed: known ? yan.revealed + san.revealed : 0,
     unrevealed: known ? yan.unrevealed + san.unrevealed : 0,
-    local: getWho() === 'san' ? san.local : 0,
+    local: getWriter() === 'san' ? san.local : 0,
   };
+}
+
+/* ── 收藏馆与邮局（同一份礼物主数据的安全投影）──────────────────── */
+
+function collectionView() {
+  const writer = getWriter();
+  const events = mergeGiftEvents(save.gift_events.events);
+  const latestById = new Map();
+  for (const event of events) latestById.set(event.gift_id, event);
+  const localIds = { yan: new Set(), san: new Set() };
+  const deleted = { yan: new Set(save.yan_deleted_ids || []), san: new Set(save.deleted_ids || []) };
+  for (const info of [writerInfo('yan'), writerInfo('san')]) {
+    for (const entry of Object.values(save[info.giftsKey]).flat()) if (entry?.id) localIds[info.id].add(entry.id);
+  }
+  const days = [];
+  const counts = { yan: 0, san: 0, total: 0 };
+  for (let day = 1; day <= 25; day++) {
+    const unlocked = isUnlocked(day);
+    const opened = save.opened.includes(day);
+    const gifts = [];
+    const add = (entry, sender, own = false, local = false) => {
+      const id = String(entry?.id || '');
+      if (!id || deleted[sender].has(id)) return;
+      const latest = latestById.get(id);
+      const sealed = !own || entry.sealed === true || entry.published === true || latest?.event_type === 'seal';
+      const permission = canMutateGift(day, entry);
+      gifts.push({
+        id, day, sender, own, title: String(entry.title || latest?.title || '').slice(0, 300),
+        type: String(entry.kind && !entry.items_v2?.length ? entry.kind : giftType(entry) || latest?.gift_type || 'gift').slice(0, 40),
+        created_at: String(entry.created_at || latest?.created_at || '').slice(0, 80),
+        updated_at: String(entry.updated_at || latest?.created_at || '').slice(0, 80),
+        opened, sealed, can_read: unlocked || own,
+        status: opened ? 'opened' : sealed ? 'sealed' : 'unopened',
+        can_edit: own && local && permission.ok,
+        edit_reason: !own ? '只能修改自己投递的礼物' : permission.reason,
+      });
+      counts[sender]++;
+    };
+    for (const id of BUILTIN_STATS[String(day)] || []) add({ id, title: '', created_at: '' }, 'yan');
+    for (const entry of remoteIndexes.yan.days?.[String(day)] || []) {
+      if (!gifts.some(gift => gift.id === entry.id)) add({ ...entry, title: latestById.get(entry.id)?.title || '' }, 'yan');
+    }
+    for (const entry of remoteData.yan.days[String(day)] || []) {
+      if (!gifts.some(gift => gift.id === entry.id)) add(entry, 'yan');
+    }
+    for (const entry of save.yan_gifts[String(day)] || []) add(entry, 'yan', writer === 'yan', true);
+    for (const entry of save.human_gifts[String(day)] || []) add(entry, 'san', writer === 'san', true);
+    for (const info of [writerInfo('yan'), writerInfo('san')]) {
+      for (const entry of remoteData[info.id].days[String(day)] || []) {
+        if (!localIds[info.id].has(entry.id) && !gifts.some(gift => gift.id === entry.id)) add(entry, info.id, writer === info.id);
+      }
+    }
+    days.push({ day, gifts });
+    counts.total += gifts.length;
+  }
+  return { days, counts, permissions: calendarRules(), writer };
+}
+
+function postOfficeView() {
+  const events = mergeGiftEvents(save.gift_events.events).reverse();
+  const who = getWriter();
+  const cursor = save.gift_events.read_cursors[who] || '';
+  const incoming = events.filter(event => event.actor_id !== who);
+  const readIds = new Set(save.gift_events.read_event_ids[who]);
+  const cursorTime = Date.parse(cursor) || 0;
+  const unread = incoming.filter(event => !readIds.has(event.event_id) && Date.parse(event.created_at) >= cursorTime);
+  const cutoff = Date.now() - 7 * 86400000;
+  return {
+    events, unread_count: unread.length, unread_ids: unread.map(event => event.event_id),
+    latest: events[0] || null, read_at: cursor,
+    total_deliveries: events.filter(event => event.event_type === 'create').length,
+    yan_deliveries: events.filter(event => event.event_type === 'create' && event.actor_id === 'yan').length,
+    san_deliveries: events.filter(event => event.event_type === 'create' && event.actor_id === 'san').length,
+    recent_count: events.filter(event => event.event_type === 'create' && Date.parse(event.created_at) >= cutoff).length,
+    permissions: calendarRules(),
+  };
+}
+
+function readGiftContent(day, giftId = '') {
+  if (!Number.isInteger(day) || day < 1 || day > 25) throw new Error('invalid day');
+  if (isUnlocked(day)) return giftsForDay(day);
+  const info = writerInfo();
+  const own = (save[info.giftsKey][String(day)] || []).filter(entry => !giftId || entry.id === giftId)
+    .map((entry, index) => ({ ...normalizeEntry(entry, `local-${day}-${index}`, { allowLocal: true }), day, answer: save.answers[`${day}:${entry.id}`] || '' }))
+    .filter(Boolean);
+  if (!own.length) throw new Error('这份礼物尚未解锁，收藏馆不会代替开盒');
+  return { gifts: {}, remote_extras: [], sannan_extras: [], human_entries: own };
 }
 
 /* ── 看板（对应 build_board）──────────────────────────────────────── */
@@ -757,7 +1016,8 @@ function getBoard() {
     const sanRemote = remoteData.san.days[String(d)] || [];
     const yanIndex = remoteIndexes.yan.days?.[String(d)] || [];
     const sanIndex = remoteIndexes.san.days?.[String(d)] || [];
-    const yanIds = new Set([...yanRemote, ...yanIndex].map(x => x.id).filter(Boolean));
+    const yanLocal = save.yan_gifts[String(d)] || [];
+    const yanIds = new Set([...yanRemote, ...yanIndex, ...yanLocal].map(x => x.id).filter(Boolean));
     const sanIds = new Set([...sanRemote, ...sanIndex].map(x => x.id).filter(Boolean));
 
     const openedBy = {};
@@ -824,6 +1084,7 @@ function getBoard() {
     if (!save.opened.includes(cell.day)) continue;
     const entries = [
       ...(remoteData.yan.days[String(cell.day)] || []),
+      ...(save.yan_gifts[String(cell.day)] || []),
       ...(remoteData.san.days[String(cell.day)] || []),
       ...(cell.gifts?.human_entries || []),
       ...(cell.gifts?.ai ? [cell.gifts.ai] : []),
@@ -851,6 +1112,8 @@ function getBoard() {
     gift_stats: summarizeGiftStats(),
     companion: structuredClone(save.companion),
     public_tracks: publicTracks.slice(0, 30),
+    collection: collectionView(),
+    post_office: postOfficeView(),
     freeze: save.yanyan_freeze,
     cells,
     settings: save.settings,
@@ -870,6 +1133,7 @@ function giftsForDay(day) {
     }
   }
   const humanList = save.human_gifts[String(day)] || [];
+  const yanLocalList = save.yan_gifts[String(day)] || [];
   const humanEntries = [];
   humanList.forEach((e, i) => {
     const normalized = normalizeEntry(e, `local-${day}-${i}`, { allowLocal: true });
@@ -882,8 +1146,10 @@ function giftsForDay(day) {
   if (humanEntries.length) gifts.human_entries = humanEntries;
 
   const withAnswer = (entry) => ({ ...entry, answer: save.answers[`${day}:${entry.id || ''}`] || '' });
-  const remoteExtras = (remoteData.yan.days[String(day)] || []).map(withAnswer);
-  const localIds = new Set(humanEntries.map(e => e.id));
+  const yanLocalIds = new Set(yanLocalList.map(entry => entry.id));
+  const yanLocalExtras = yanLocalList.map((entry, index) => withAnswer(normalizeEntry(entry, `yan-local-${day}-${index}`, { allowLocal: true }))).filter(Boolean);
+  const remoteExtras = [...yanLocalExtras, ...(remoteData.yan.days[String(day)] || []).filter(entry => !yanLocalIds.has(entry.id)).map(withAnswer)];
+  const localIds = new Set([...humanEntries, ...yanLocalExtras].map(e => e.id));
   const sannanExtras = (remoteData.san.days[String(day)] || [])
     .filter(e => !localIds.has(e.id)).map(withAnswer);
   const displayedIds = [...remoteExtras, ...sannanExtras].map(e => e.id).filter(Boolean);
@@ -900,17 +1166,28 @@ function touch(day) {
     recordPeek(day, save.settings.who === 'yan' ? 'yan' : 'san', 'attempt');
     return { open: false, peek: true, outcome: 'attempt', ...content };
   }
-  markOpened(day);
-  return { open: true, ...content };
+  const firstOpen = markOpened(day);
+  if (firstOpen) {
+    const entries = [
+      ...(content.gifts?.ai ? [content.gifts.ai] : []),
+      ...(content.gifts?.human_entries || []),
+      ...(content.remote_extras || []),
+      ...(content.sannan_extras || []),
+    ];
+    for (const entry of entries) addGiftEvent('open', entry, day, { actor_id: getWho() });
+  }
+  return { open: true, firstOpen, ...content };
 }
 
 function markOpened(day) {
-  if (!save.opened.includes(day)) {
+  const first = !save.opened.includes(day);
+  if (first) {
     save.opened.push(day);
     save.opened.sort((a, b) => a - b);
   }
   if (!save.opened_at[String(day)]) save.opened_at[String(day)] = shanghaiNowIso();
   persist();
+  return first;
 }
 
 function recordPeek(day, who, outcome) {
@@ -948,36 +1225,110 @@ function answer(day, giftId, text) {
   return { ok: true };
 }
 
-function hide(day, items, icon) {
-  if (!Number.isInteger(day) || day < 1 || day > 25) throw new Error('invalid day');
-  const cleanItems = (items || []).slice(0, 24).map(it => cleanItem(it, { allowLocal: true })).filter(Boolean);
+function writerInfo(writer = getWriter()) {
+  return writer === 'yan'
+    ? { id: 'yan', name: '砚砚', recipient: '三三', giftsKey: 'yan_gifts', deletedKey: 'yan_deleted_ids', recordsKey: 'yan_deleted_records', file: 'gifts.json', index: 'gift_index_yanyan.json', digest: YAN_DIGEST, assetDir: 'yanyan' }
+    : { id: 'san', name: '三三', recipient: '砚砚', giftsKey: 'human_gifts', deletedKey: 'deleted_ids', recordsKey: 'deleted_records', file: 'sannan_gifts.json', index: 'gift_index_sannan.json', digest: SAN_DIGEST, assetDir: 'sannan' };
+}
+
+function ownGift(day, giftId, writer = getWriter()) {
+  const info = writerInfo(writer);
+  const id = String(giftId || '').slice(0, 160);
+  const local = (save[info.giftsKey][String(day)] || []).find(entry => entry.id === id);
+  if (local) return { entry: local, local: true };
+  const remote = (remoteData[info.id].days[String(day)] || []).find(entry => entry.id === id);
+  if (remote) return { entry: remote, local: false };
+  return null;
+}
+
+function assertGiftMutation(day, giftId) {
+  if (!Number.isInteger(day) || day < 1 || day > 25 || !giftId) throw new Error('invalid gift');
+  const found = ownGift(day, giftId);
+  if (!found) throw new Error('只能修改自己投递的礼物');
+  const permission = canMutateGift(day, found.entry);
+  if (!permission.ok) throw new Error(permission.reason);
+  return found;
+}
+
+function cleanGiftItems(items) {
+  const cleanItems = (items || []).slice(0, 24).map(item => cleanItem(item, { allowLocal: true })).filter(Boolean);
   if (!cleanItems.length) throw new Error('至少要放一点内容进礼盒');
+  return cleanItems;
+}
+
+function hide(day, items, icon, options = {}) {
+  assertCanCreate(day);
+  const info = writerInfo();
+  const cleanItems = cleanGiftItems(items);
   const created = shanghaiNowIso();
-  const id = `san-${(crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`).replace(/-/g, '')}`;
+  const suffix = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`).replace(/-/g, '');
+  const id = `${info.id}-${suffix}`;
   const entry = {
-    id,
-    created_at: created,
-    at: created,
-    title: `三三藏在第${day}天的礼物`,
+    id, from: info.name, recipient: info.recipient,
+    created_at: created, updated_at: created, at: created,
+    title: String(options.title || `${info.name}藏在第${day}天的礼物`).slice(0, 300),
     kind: icon || 'lettre',
-    text: cleanItems.find(i => i.type === 'text')?.text || '',
-    song: cleanItems.find(i => i.type === 'song')?.url || null,
-    items_v2: cleanItems,
-    published: false,
+    text: cleanItems.find(item => item.type === 'text')?.text || '',
+    song: cleanItems.find(item => item.type === 'song')?.url || null,
+    items_v2: cleanItems, published: false, sealed: false,
   };
-  (save.human_gifts[String(day)] ||= []).push(entry);
+  (save[info.giftsKey][String(day)] ||= []).push(entry);
   persist();
-  return { ok: true, id };
+  addGiftEvent('create', entry, day);
+  return { ok: true, id, event_id: save.gift_events.events.at(-1)?.event_id };
+}
+
+function updateGift(day, giftId, items, options = {}) {
+  const found = assertGiftMutation(day, giftId);
+  const info = writerInfo();
+  const cleanItems = cleanGiftItems(items);
+  const updated = shanghaiNowIso();
+  const entry = {
+    ...found.entry, ...normalizeEntry(found.entry, giftId, { allowLocal: true }),
+    from: info.name, recipient: info.recipient,
+    title: String(options.title ?? found.entry.title ?? `${info.name}藏在第${day}天的礼物`).slice(0, 300),
+    kind: options.icon || found.entry.kind || 'lettre',
+    text: cleanItems.find(item => item.type === 'text')?.text || '',
+    song: cleanItems.find(item => item.type === 'song')?.url || null,
+    items_v2: cleanItems, updated_at: updated, at: updated, published: false, sealed: false,
+  };
+  const list = save[info.giftsKey][String(day)] ||= [];
+  const index = list.findIndex(item => item.id === giftId);
+  if (index >= 0) list[index] = entry; else list.push(entry);
+  save[info.deletedKey] = (save[info.deletedKey] || []).filter(id => id !== giftId);
+  persist();
+  addGiftEvent(options.attachment ? 'attachment' : 'update', entry, day);
+  return { ok: true, id: giftId };
+}
+
+function getGiftForEdit(day, giftId) {
+  return structuredClone(assertGiftMutation(day, giftId).entry);
+}
+
+function deleteGift(day, giftId) {
+  const found = assertGiftMutation(day, giftId);
+  const info = writerInfo();
+  save[info.giftsKey][String(day)] = (save[info.giftsKey][String(day)] || []).filter(entry => entry.id !== giftId);
+  save[info.deletedKey] = [...new Set([...(save[info.deletedKey] || []), String(giftId)])];
+  save[info.recordsKey] = [...(save[info.recordsKey] || []).filter(record => record.id !== giftId), { id: String(giftId), day }];
+  if (remoteData[info.id].days[String(day)]) remoteData[info.id].days[String(day)] = remoteData[info.id].days[String(day)].filter(entry => entry.id !== giftId);
+  persist();
+  addGiftEvent('delete', found.entry, day);
+  return { ok: true, id: giftId };
 }
 
 function reply(day, giftId, text) {
+  const info = writerInfo();
   const clean = String(text || '').trim().slice(0, 4000);
   const d = parseInt(day, 10);
-  if (!Number.isInteger(d) || d < 1 || d > 25 || !clean) throw new Error('回信内容不能为空');
+  if (!clean) throw new Error('回信内容不能为空');
+  assertCanCreate(d);
   const created = shanghaiNowIso();
   const id = `reply-${(crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`).replace(/-/g, '')}`;
-  (save.human_gifts[String(d)] ||= []).push({ id, created_at:created, at:created, title:'写给这份礼物的回信', kind:'letter', reply_to:String(giftId||'').slice(0,160), text:clean, items_v2:[{type:'text',text:clean}], published:false });
+  const entry = { id, from:info.name, recipient:info.recipient, created_at:created, updated_at:created, at:created, title:'写给这份礼物的回信', kind:'letter', reply_to:String(giftId||'').slice(0,160), text:clean, items_v2:[{type:'text',text:clean}], published:false, sealed:false };
+  (save[info.giftsKey][String(d)] ||= []).push(entry);
   persist();
+  addGiftEvent('create', entry, d);
   return { ok:true, id };
 }
 
@@ -1108,7 +1459,7 @@ function commitStamp() {
   return `${p.month}-${p.day} ${p.hour}:${p.minute}`;
 }
 
-async function publishLocalAsset(token, url, publishedKeys) {
+async function publishLocalAsset(token, url, publishedKeys, assetDir = 'sannan') {
   if (!isAllowedRemoteAsset(url)) {
     if (!isSafeLocalUploadUrl(url)) throw new Error('unsupported asset URL');
   } else {
@@ -1122,7 +1473,7 @@ async function publishLocalAsset(token, url, publishedKeys) {
   const ext = key.slice(key.lastIndexOf('.')).toLowerCase();
   if (!REMOTE_MEDIA_EXTENSIONS.has(ext)) throw new Error(`资源类型不合法：${ext}`);
   const digest = await sha256Hex(bytes);
-  const repoPath = `assets/sannan/${digest}${ext}`;
+  const repoPath = `assets/${assetDir}/${digest}${ext}`;
 
   let existing = null, sha = null;
   try {
@@ -1130,7 +1481,7 @@ async function publishLocalAsset(token, url, publishedKeys) {
   } catch (e) { if (e.status !== 404) throw e; }
   if (existing == null) {
     try {
-      await ghPutFile(token, repoPath, bytes, `Add sannan gift asset ${digest.slice(0, 12)}`, sha);
+      await ghPutFile(token, repoPath, bytes, `Add ${assetDir} gift asset ${digest.slice(0, 12)}`, sha);
     } catch (e) {
       if (e.status !== 409 && e.status !== 422) throw e;
       // 并发冲突：重读，若已存在同路径则视为成功
@@ -1141,13 +1492,15 @@ async function publishLocalAsset(token, url, publishedKeys) {
     const existingHex = await sha256Hex(existing);
     if (existingHex !== digest) throw new Error('remote asset hash mismatch');
   }
-  const rawUrl = `${CONFIG.rawAssetPrefix}sannan/${digest}${ext}`;
+  const rawUrl = `${CONFIG.rawAssetPrefix}${assetDir}/${digest}${ext}`;
   publishedKeys?.add(key);
   return rawUrl;
 }
 
-function mergeDayPayloads(remote, local) {
+function mergeDayPayloads(remote, local, info = writerInfo()) {
   const merged = normalizeDays(remote, { allowLocal: false });
+  const deleted = new Set(save[info.deletedKey] || []);
+  for (const [day, entries] of Object.entries(merged.days)) merged.days[day] = entries.filter(entry => !deleted.has(entry.id));
   for (const [day, entries] of Object.entries(local.days || {})) {
     const existing = new Map((merged.days[day] || []).map(e => [e.id, e]));
     for (const entry of entries) existing.set(entry.id, entry);
@@ -1164,12 +1517,13 @@ function indexFromDays(daysObj, author) {
   return { version: 1, author, updated_at: shanghaiNowIso(), days };
 }
 
-function mergeGiftIndexes(current, incoming) {
-  const merged = normalizeIndex(current, 'san');
-  const next = normalizeIndex(incoming, 'san');
+function mergeGiftIndexes(current, incoming, info = writerInfo()) {
+  const merged = normalizeIndex(current, info.id);
+  const next = normalizeIndex(incoming, info.id);
+  const deleted = new Set(save[info.deletedKey] || []);
   for (const [day, entries] of Object.entries(next.days || {})) {
-    const byId = new Map((merged.days[day] || []).map(entry => [entry.id, entry]));
-    for (const entry of entries) if (!byId.has(entry.id)) byId.set(entry.id, entry);
+    const byId = new Map((merged.days[day] || []).filter(entry => !deleted.has(entry.id)).map(entry => [entry.id, entry]));
+    for (const entry of entries) if (!deleted.has(entry.id) && !byId.has(entry.id)) byId.set(entry.id, entry);
     merged.days[day] = [...byId.values()];
   }
   merged.updated_at = next.updated_at || merged.updated_at;
@@ -1181,36 +1535,44 @@ async function publishAll(onProgress) {
   if (!token) throw Object.assign(new Error('需要 GitHub Token'), { status: 401, reason: 'not_configured' });
   const progress = (msg) => { try { onProgress?.(msg); } catch { /* ignore */ } };
   const publishedKeys = new Set();
+  const info = writerInfo();
+  const localGifts = save[info.giftsKey];
 
   try {
-    /* 1. 上传本地暂存资源 → assets/sannan/<sha256>.<ext> */
+    for (const [day, entries] of Object.entries(localGifts)) {
+      for (const entry of entries) if (entry.published !== true) assertCanCreate(Number(day));
+    }
+    for (const record of save[info.recordsKey] || []) {
+      if (!canMutateGift(record.day, { sealed: false }).ok) throw new Error(canMutateGift(record.day, { sealed: false }).reason);
+    }
     progress('正在上传图片与音频资源…');
-    for (const [dayStr, entries] of Object.entries(save.human_gifts)) {
+    for (const entries of Object.values(localGifts)) {
       for (const entry of entries) {
         if (!entry.items_v2) continue;
         for (const item of entry.items_v2) {
-          if (['image', 'voice', 'audio', 'attachment'].includes(item.type) && item.url) {
-            item.url = await publishLocalAsset(token, item.url, publishedKeys);
-          }
-          if (item.type === 'photo' && item.photo?.front?.url) item.photo.front.url = await publishLocalAsset(token, item.photo.front.url, publishedKeys);
-          if (item.type === 'comic' && Array.isArray(item.comic?.pages)) for (const page of item.comic.pages) page.url = await publishLocalAsset(token, page.url, publishedKeys);
-          if (item.type === 'scrapbook' && Array.isArray(item.layout?.stickers)) for (const sticker of item.layout.stickers) if (sticker.src) sticker.src = await publishLocalAsset(token, sticker.src, publishedKeys);
+          const publish = url => publishLocalAsset(token, url, publishedKeys, info.assetDir);
+          if (['image', 'voice', 'audio', 'attachment'].includes(item.type) && item.url) item.url = await publish(item.url);
+          if (item.type === 'photo' && item.photo?.front?.url) item.photo.front.url = await publish(item.photo.front.url);
+          if (item.type === 'comic' && Array.isArray(item.comic?.pages)) for (const page of item.comic.pages) page.url = await publish(page.url);
+          if (item.type === 'scrapbook' && Array.isArray(item.layout?.stickers)) for (const sticker of item.layout.stickers) if (sticker.src) sticker.src = await publish(sticker.src);
         }
       }
     }
 
-    /* 2. 合并 sannan_gifts.json（带冲突重试，不覆盖定时任务刚提交的数据） */
     progress('正在合并礼物数据…');
     const localDays = { days: {} };
-    for (const [dayStr, entries] of Object.entries(save.human_gifts)) {
+    for (const [dayStr, entries] of Object.entries(localGifts)) {
       const output = [];
       entries.forEach((raw, i) => {
-        const entry = normalizeEntry(raw, `san-${dayStr}-${i}`, { allowLocal: true });
+        const entry = normalizeEntry(raw, `${info.id}-${dayStr}-${i}`, { allowLocal: true });
         if (!entry) return;
-        entry.from = '三三';
+        entry.from = info.name;
+        entry.recipient = info.recipient;
         entry.text = entry.items_v2.find(x => x.type === 'text')?.text || '';
         entry.song = entry.items_v2.find(x => x.type === 'song')?.url || null;
         entry.items = entry.items_v2;
+        entry.published = true;
+        entry.sealed = true;
         output.push(entry);
       });
       if (output.length) localDays.days[dayStr] = output;
@@ -1218,23 +1580,17 @@ async function publishAll(onProgress) {
 
     let merged = null;
     for (let attempt = 0; attempt < 4; attempt++) {
-      const { content, sha } = await ghGetFile(token, 'sannan_gifts.json');
+      const { content, sha } = await ghGetFile(token, info.file);
       let remote = { days: {} };
-      if (content) {
-        const wrapper = JSON.parse(new TextDecoder().decode(content));
-        remote = decodePayload(wrapper.payload, SAN_DIGEST);
-      }
-      merged = mergeDayPayloads(remote, localDays);
+      if (content) remote = decodePayload(JSON.parse(new TextDecoder().decode(content)).payload, info.digest);
+      merged = mergeDayPayloads(remote, localDays, info);
       const outWrapper = {
-        version: 2,
-        updated_at: shanghaiNowIso(),
-        protocol: 'advent-gifts-v3.2',
-        payload: encodePayload(merged, SAN_DIGEST),
+        version: 2, updated_at: shanghaiNowIso(), protocol: 'advent-gifts-v3.2',
+        payload: encodePayload(merged, info.digest),
       };
       try {
-        await ghPutFile(token, 'sannan_gifts.json',
-          new TextEncoder().encode(JSON.stringify(outWrapper, null, 2)),
-          `Update sannan gifts (${commitStamp()})`, sha);
+        await ghPutFile(token, info.file, new TextEncoder().encode(JSON.stringify(outWrapper, null, 2)),
+          `Update ${info.id} gifts (${commitStamp()})`, sha);
         break;
       } catch (e) {
         if ((e.status !== 409 && e.status !== 422) || attempt === 3) throw e;
@@ -1243,32 +1599,29 @@ async function publishAll(onProgress) {
     }
 
     progress('正在核实远程礼物…');
-    const { content: verifiedContent } = await ghGetFile(token, 'sannan_gifts.json');
+    const { content: verifiedContent } = await ghGetFile(token, info.file);
     if (!verifiedContent) throw new Error('远程核实失败：没有读到刚发布的礼物文件');
-    const verified = decodePayload(JSON.parse(new TextDecoder().decode(verifiedContent)).payload, SAN_DIGEST);
-    const remoteIds = new Set(Object.values(verified.days || {}).flat().map(entry => entry.id));
-    const missing = Object.values(localDays.days || {}).flat().filter(entry => !remoteIds.has(entry.id)).map(entry => entry.id);
-    if (missing.length) throw new Error(`远程核实失败：${missing.length} 份礼物尚未确认写入`);
+    const verified = decodePayload(JSON.parse(new TextDecoder().decode(verifiedContent)).payload, info.digest);
+    const verifiedEntries = new Map(Object.values(verified.days || {}).flat().map(entry => [entry.id, entry]));
+    const missing = Object.values(localDays.days || {}).flat().filter(entry => verifiedEntries.get(entry.id)?.sealed !== true).map(entry => entry.id);
+    if (missing.length) throw new Error(`远程核实失败：${missing.length} 份礼物尚未确认封存写入`);
 
-    /* 非必要步骤：失败只记录告警，不阻断礼物本体与后续步骤（可独立修复重试） */
     const warnings = [];
     const softStep = async (label, fn) => { try { await fn(); } catch (e) { warnings.push(`${label}：${e.message || e}`); } };
 
-    /* 3. 更新无内容索引（独立于礼物本体；失败不影响已写入的礼物） */
-    const index = indexFromDays(merged, 'san');
+    const index = indexFromDays(merged, info.id);
     await softStep('礼物索引', async () => {
       progress('正在更新礼物索引…');
       for (let attempt = 0; attempt < 4; attempt++) {
-        const { content, sha } = await ghGetFile(token, 'gift_index_sannan.json');
-        let current = { version: 1, author: 'san', days: {} };
+        const { content, sha } = await ghGetFile(token, info.index);
+        let current = { version: 1, author: info.id, days: {} };
         if (content) {
           try { current = JSON.parse(new TextDecoder().decode(content)); } catch { /* 损坏索引按空索引合并 */ }
         }
-        const mergedIndex = mergeGiftIndexes(current, index);
+        const mergedIndex = mergeGiftIndexes(current, index, info);
         try {
-          await ghPutFile(token, 'gift_index_sannan.json',
-            new TextEncoder().encode(JSON.stringify(mergedIndex, null, 2)),
-            `Update sannan gift index (${commitStamp()})`, sha);
+          await ghPutFile(token, info.index, new TextEncoder().encode(JSON.stringify(mergedIndex, null, 2)),
+            `Update ${info.id} gift index (${commitStamp()})`, sha);
           index.days = mergedIndex.days;
           break;
         } catch (e) {
@@ -1319,12 +1672,44 @@ async function publishAll(onProgress) {
       }
     });
 
-    /* 5. 标记本地条目已发布并持久化 */
-    for (const entries of Object.values(save.human_gifts)) {
-      for (const entry of entries) entry.published = true;
+    const sealing = Object.entries(localGifts).flatMap(([day, entries]) => entries.filter(entry => entry.published !== true).map(entry => ({ entry, day: Number(day) })));
+    for (const { entry, day } of sealing) {
+      entry.published = true;
+      entry.sealed = true;
+      addGiftEvent('seal', entry, day);
     }
-    remoteData.san = normalizeDays(merged, { allowLocal: false });
-    remoteIndexes.san = index;
+
+    await softStep('投递活动', async () => {
+      progress('正在同步投递活动与未读状态…');
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const { content, sha } = await ghGetFile(token, 'gift_events.json');
+        let current = { events: [], read_cursors: { san: '', yan: '' } };
+        if (content) {
+          try { current = JSON.parse(new TextDecoder().decode(content)); } catch { current = { events: [], read_cursors: { san: '', yan: '' } }; }
+        }
+        save.gift_events.events = mergeGiftEvents(save.gift_events.events, current.events);
+        const currentReadIds = current?.read_event_ids;
+        const legacyReadIds = Array.isArray(currentReadIds) ? currentReadIds : [];
+        for (const who of ['san', 'yan']) {
+          save.gift_events.read_event_ids[who] = cleanReadEventIds([...save.gift_events.read_event_ids[who], ...(currentReadIds?.[who] ?? legacyReadIds)]);
+          const incoming = String(current?.read_cursors?.[who] || '');
+          if (incoming > (save.gift_events.read_cursors[who] || '')) save.gift_events.read_cursors[who] = incoming;
+        }
+        const output = eventStore();
+        try {
+          await ghPutFile(token, 'gift_events.json', new TextEncoder().encode(JSON.stringify(output, null, 2)), `Merge gift events (${commitStamp()})`, sha);
+          break;
+        } catch (e) {
+          if ((e.status !== 409 && e.status !== 422) || attempt === 3) throw e;
+          await new Promise(resolve => setTimeout(resolve, 300 * (attempt + 1)));
+        }
+      }
+    });
+
+    /* 5. 标记本地条目已发布并持久化 */
+    save[info.recordsKey] = [];
+    remoteData[info.id] = normalizeDays(merged, { allowLocal: false });
+    remoteIndexes[info.id] = index;
     persist();
     cachedGiftStats = summarizeGiftStats();
     writeRemoteCache();
@@ -1332,7 +1717,7 @@ async function publishAll(onProgress) {
 
     return { message: warnings.length
       ? `礼物已发布；部分附带数据未同步（${warnings.join('；')}），可稍后重试，礼物不会重复追加`
-      : '礼物、资源、索引与偷看记录均已发布', warnings };
+      : '礼物、资源、索引、投递活动与偷看记录均已发布', warnings };
   } catch (e) {
     if (e.status === 401) {
       clearPat();
@@ -1379,8 +1764,9 @@ function setPatRemember(remember) {
   if (token) setPat(token, Boolean(remember));
 }
 
-/* ── 身份记名（偷看事件归属）──────────────────────────────────────── */
+/* ── 身份记名（偷看事件归属）与礼物写入身份 ─────────────────────────── */
 
+function getWriter() { return new URLSearchParams(location.search).get('writer') === 'yan' ? 'yan' : 'san'; }
 function getWho() { return save.settings.who === 'yan' ? 'yan' : 'san'; }
 function setWho(who) {
   save.settings.who = who === 'yan' ? 'yan' : 'san';
@@ -1404,6 +1790,12 @@ export const Backend = {
   answer,
   reply,
   hide,
+  updateGift,
+  deleteGift,
+  getGiftForEdit,
+  readGiftContent,
+  markEventsRead,
+  calendarRules,
   uploadFile,
   resolveMediaUrl,
   isAllowedRemoteAsset,
@@ -1415,6 +1807,7 @@ export const Backend = {
   hasRememberedPat,
   setPatRemember,
   getWho,
+  getWriter,
   setWho,
   getCompanion,
   setCompanion,

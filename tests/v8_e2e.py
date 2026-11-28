@@ -2,8 +2,10 @@
 """V8 fictional-data regression tests; never reads real gift payloads."""
 import json
 import os
+import shutil
 import struct
 import sys
+import tempfile
 import time
 import zlib
 from pathlib import Path
@@ -14,7 +16,8 @@ from mock_data import encode as me, wrapper as mw, YAN_DIGEST, SAN_DIGEST
 
 SITE = os.environ.get('ADVENT_SITE', 'http://127.0.0.1:8024/')
 DATA = 'http://127.0.0.1:8025/data'
-MOCK = Path(os.environ.get('ADVENT_MOCK_DIR', '/tmp/mockdata'))
+MOCK = Path(os.environ.get('ADVENT_MOCK_DIR', str(Path(tempfile.gettempdir()) / 'mockdata')))
+GH = Path(tempfile.gettempdir()) / 'mockgh'
 RESULTS = []
 
 
@@ -39,6 +42,8 @@ def png(path, width=96, height=72):
 
 def setup_fiction():
     MOCK.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(GH, ignore_errors=True)
+    os.makedirs(GH, exist_ok=True)
     yan = {'days': {
         '3': [{'id': 'mock-yan-3', 'items_v2': [{'type': 'text', 'text': 'MOCK-YAN-3'}]}],
         '5': [{'id': 'mock-yan-5', 'items_v2': [{'type': 'text', 'text': 'MOCK-YAN-5'}]}],
@@ -84,7 +89,7 @@ def test_stats(browser):
     pg.evaluate('window.Backend.sync()')
     pg.wait_for_function('window.Backend.getBoard().gift_stats.fresh === true')
     stats = pg.evaluate('window.Backend.getBoard().gift_stats')
-    builtin = pg.evaluate("import('./builtin-gifts.js?v=8.1.0').then(m => Object.values(m.BUILTIN_STATS).flat().length)")
+    builtin = pg.evaluate("import('./builtin-gifts.js?v=8.2.0').then(m => Object.values(m.BUILTIN_STATS).flat().length)")
     check('stats deduplicate IDs and union indexes', stats['yan']['total'] == builtin + 3 and stats['san']['total'] == 301, stats)
     check('stats have no per-day distribution', not any(key in stats for key in ('days', 'gifts', 'items')), list(stats))
     check('stats piles use fixed decorative DOM', pg.locator('.adv-pile-box').count() == 16, pg.locator('.adv-pile-box').count())
@@ -154,7 +159,7 @@ def test_photo_preview(browser, image):
     check('preview is an independent full-screen mask', abs(geometry['ow'] - geometry['vw']) < 2 and abs(geometry['oh'] - geometry['vh']) < 2, geometry)
     check('preview is centered and slightly below center', abs(geometry['cx'] - geometry['vw']/2) < 3 and 0 <= geometry['cy'] - geometry['vh']/2 <= 40, geometry)
     pg.locator('#selfPreviewOverlay .adv-front').click()
-    pg.wait_for_function("document.querySelector('#selfPreviewOverlay .adv-envelope-content')?.classList.contains('opened')")
+    pg.wait_for_function("document.querySelector('#selfPreviewOverlay .adv-xcard')?.classList.contains('flipped')")
     pg.wait_for_selector('#selfPreviewOverlay .adv-photo-front.frame-stamp')
     check('recipient preview uses selected frame', pg.locator('#selfPreviewOverlay .adv-photo-front.frame-stamp').count() == 1)
     with pg.expect_download() as download_info:

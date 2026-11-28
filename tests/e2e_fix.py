@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # 针对性回归测试：第6格筹备期不亮灯、显示模式、流畅模式、离线提示、性能优化。
 # 全部使用虚构数据，不读取/打印/修改任何真实礼物，不清除真实存档。
-import os, sys, json, base64, re
+import os, sys, json, base64, re, tempfile
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
@@ -11,6 +11,7 @@ from mock_data import encode as me, wrapper as mw, YAN_DIGEST, SAN_DIGEST
 SITE = os.environ.get('ADVENT_SITE', 'http://localhost:8024/')
 DATA = 'http://localhost:8025/data'
 SAVE_KEY = 'advent-web-save-v1'
+MOCK_DIR = Path(tempfile.gettempdir()) / 'mockdata'
 
 RESULTS = []
 def check(name, cond, detail=''):
@@ -28,12 +29,12 @@ def setup_fiction():
                'items_v2': [{'type': 'text', 'text': 'MOCK-第二格虚构礼物'}],
                'created_at': '2026-11-20T12:00:00+08:00'}],
     }}
-    Path('/tmp/mockdata/gifts.json').write_text(json.dumps(mw(yan, YAN_DIGEST), ensure_ascii=False))
+    Path(MOCK_DIR / 'gifts.json').write_text(json.dumps(mw(yan, YAN_DIGEST), ensure_ascii=False))
     san = {'days': {}}
-    Path('/tmp/mockdata/sannan_gifts.json').write_text(json.dumps(mw(san, SAN_DIGEST), ensure_ascii=False))
-    Path('/tmp/mockdata/gift_index_yanyan.json').write_text(json.dumps({'version':1,'author':'yan','days':{}}))
-    Path('/tmp/mockdata/gift_index_sannan.json').write_text(json.dumps({'version':1,'author':'san','days':{}}))
-    Path('/tmp/mockdata/peek_log.json').write_text(json.dumps({'events': []}))
+    Path(MOCK_DIR / 'sannan_gifts.json').write_text(json.dumps(mw(san, SAN_DIGEST), ensure_ascii=False))
+    Path(MOCK_DIR / 'gift_index_yanyan.json').write_text(json.dumps({'version':1,'author':'yan','days':{}}))
+    Path(MOCK_DIR / 'gift_index_sannan.json').write_text(json.dumps({'version':1,'author':'san','days':{}}))
+    Path(MOCK_DIR / 'peek_log.json').write_text(json.dumps({'events': []}))
 
 def fresh_ctx(browser, dt):
     ctx = browser.new_context(viewport={'width': 390, 'height': 844}, has_touch=True, is_mobile=True)

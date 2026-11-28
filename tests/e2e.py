@@ -4,8 +4,10 @@ import base64
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -16,6 +18,8 @@ SITE = os.environ.get('ADVENT_SITE', 'http://localhost:8024/')
 MOCK = 'http://localhost:8025/data'
 MOCK_GH = 'http://localhost:8026'
 SAVE_KEY = 'advent-web-save-v1'
+MOCK_DIR = Path(os.environ.get('ADVENT_MOCK_DIR', str(Path(tempfile.gettempdir()) / 'mockdata')))
+GH_DIR = Path(tempfile.gettempdir()) / 'mockgh'
 
 results = []
 
@@ -57,12 +61,12 @@ def goto_page(page, clock_dt, extra=''):
 
 
 def main():
-    subprocess.run([sys.executable, str(ROOT / 'tests/mock_data.py'), '/tmp/mockdata'], check=True)
-    subprocess.run(['rm', '-rf', '/tmp/mockgh'], check=True)
+    subprocess.run([sys.executable, str(ROOT / 'tests/mock_data.py'), str(MOCK_DIR)], check=True)
+    shutil.rmtree(str(GH_DIR), ignore_errors=True)
 
-    data_srv = subprocess.Popen([sys.executable, str(ROOT / 'tests/mock_server.py'), '/tmp/mockdata', '/tmp/mockgh'],
+    data_srv = subprocess.Popen([sys.executable, str(ROOT / 'tests/mock_server.py'), str(MOCK_DIR), str(GH_DIR)],
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    gh_srv = subprocess.Popen([sys.executable, str(ROOT / 'tests/mock_server.py'), '/tmp/mockdata', '/tmp/mockgh'],
+    gh_srv = subprocess.Popen([sys.executable, str(ROOT / 'tests/mock_server.py'), str(MOCK_DIR), str(GH_DIR)],
                               env={**os.environ, 'MOCK_GH': '1'}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(2)
 
@@ -74,11 +78,12 @@ def main():
             ctx = browser.new_context()
             page = ctx.new_page()
             errors = []
-            page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
+            page.on('console', lambda m: errors.append(f"{m.text} @ {m.location.get('url', '')}") if m.type == 'error' else None)
             page.on('pageerror', lambda e: errors.append(str(e)))
             goto_page(page, '2026-11-28T10:00:00+08:00')
 
-            check('A1 页面加载无 JS 错误', not [e for e in errors if 'favicon' not in e and 'net::ERR_FAILED' not in e], str(errors[:3]))
+            unexpected_errors = [e for e in errors if not any(token in e for token in ('favicon', 'net::ERR_FAILED', 'fonts.googleapis.com', 'fonts.gstatic.com'))]
+            check('A1 页面加载无 JS 错误', not unexpected_errors, str(unexpected_errors[:3]))
             sync_line = page.locator('#syncLine').inner_text()
             check('A2 远程同步成功', '已同步' in sync_line, sync_line)
             save = load_save(page) or {}
@@ -87,14 +92,14 @@ def main():
 
             # 筹备期点已备好礼物的窗 → 偷看
             page.locator('.adv-win:has(small:text-is("3"))').click()
-            page.wait_for_timeout(500)
+            page.wait_for_function('''() => JSON.parse(localStorage.getItem("advent-web-save-v1") || '{}').peek_log?.some(e => e.who === 'san' && e.outcome === 'attempt')''', timeout=5000)
             save = load_save(page)
             san_peeks = [e for e in save['peek_log'] if e['who'] == 'san']
-            check('A5 筹备期点窗记录偷看(attempt)', len(san_peeks) == 1 and san_peeks[0]['outcome'] == 'attempt')
+            check('A5 筹备期点窗记录偷看(attempt)', len(san_peeks) == 1 and san_peeks[0]['outcome'] == 'attempt', str(san_peeks))
             check('A6 窗户抖动提示', '记下' in page.locator('.adv-toast.show').inner_text())
 
             # 缓存穿透检查
-            access = Path('/tmp/mockgh/access_log.txt').read_text()
+            access = Path(GH_DIR / 'access_log.txt').read_text()
             import re as _re
             check('A7 同步请求带缓存穿透参数', bool(_re.search(r'/data/gifts\.json\?t=\d+', access)), access[:200])
             ctx.close()
@@ -103,7 +108,7 @@ def main():
             ctx = browser.new_context()
             page = ctx.new_page()
             errors = []
-            page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
+            page.on('console', lambda m: errors.append(f"{m.text} @ {m.location.get('url', '')}") if m.type == 'error' else None)
             page.on('pageerror', lambda e: errors.append(str(e)))
             goto_page(page, '2026-12-05T10:00:00+08:00')
 
@@ -227,12 +232,12 @@ def main():
             page.wait_for_timeout(600)
 
             # 发布（模拟 GitHub API，第一次 PUT sannan_gifts.json 返回 409）
-            Path('/tmp/mockgh/conflict_sannan_gifts_once').write_text('1')
+            Path(GH_DIR / 'conflict_sannan_gifts_once').write_text('1')
             pub_msg = publish_and_wait(page, 'test-token')
             check('C6 发布成功(含409冲突重试)', '已发布' in pub_msg, pub_msg)
 
             # 校验仓库内容
-            sg = json.loads(Path('/tmp/mockgh/sannan_gifts.json').read_text())
+            sg = json.loads(Path(GH_DIR / 'sannan_gifts.json').read_text())
             payload = sg['payload']
             san_digest = bytes.fromhex('eb135c1744d756e7bca04f630db146419c5fd039b4f9ec76c54dffcabceaa771')
             raw = base64.b64decode(payload)
@@ -245,23 +250,23 @@ def main():
                 'https://raw.githubusercontent.com/3William33/sannan-yanyan-advent-2026/main/assets/sannan/'))
             check('C9 协议字段完整(protocol v3.2)', sg.get('protocol') == 'advent-gifts-v3.2' and sg.get('version') == 2)
 
-            assets_dir = Path('/tmp/mockgh/assets/sannan')
+            assets_dir = Path(GH_DIR / 'assets/sannan')
             check('C10 图片资产按sha256入库', assets_dir.exists() and len(list(assets_dir.glob('*.png'))) == 1)
             uploaded = list(assets_dir.glob('*.png'))[0].read_bytes()
             check('C11 资产内容一致', uploaded == png)
 
-            idx = json.loads(Path('/tmp/mockgh/gift_index_sannan.json').read_text())
+            idx = json.loads(Path(GH_DIR / 'gift_index_sannan.json').read_text())
             check('C12 索引已更新且不含内容', idx['days'].get('7') and idx['days']['7'][0]['id'] == day7[0]['id']
                   and 'text' not in json.dumps(idx['days']['7']))
 
-            peek = json.loads(Path('/tmp/mockgh/peek_log.json').read_text())
+            peek = json.loads(Path(GH_DIR / 'peek_log.json').read_text())
             ids = [e['id'] for e in peek['events']]
             check('C13 偷看记录双向合并', 'mock-peek-1' in ids and 'peek-local-test' in ids)
 
             # commit message 不包含礼物内容
             # （mock_server 不落 commit message；改为检查源码中固定模式）——直接验证本地礼物正文未出现在任何 PUT body 的 message 字段
             # 通过重放：读取 access_log 确认调用序列
-            access = Path('/tmp/mockgh/access_log.txt').read_text()
+            access = Path(GH_DIR / 'access_log.txt').read_text()
             check('C14 发布调用序列完整', all(p in access for p in
                   ['sannan_gifts.json', 'gift_index_sannan.json', 'peek_log.json', 'assets/sannan/']))
 
@@ -307,8 +312,26 @@ def main():
                         'items_v2': [{'type': 'text', 'text': 'MOCK-三三任意追加'}],
                         'created_at': '2026-11-25T10:00:00+08:00'}],
             }}
-            Path('/tmp/mockdata/gifts.json').write_text(json.dumps(mock_wrapper(yan, YAN_DIGEST), ensure_ascii=False))
-            Path('/tmp/mockdata/sannan_gifts.json').write_text(json.dumps(mock_wrapper(san, SAN_DIGEST), ensure_ascii=False))
+            indexes = {
+                'gift_index_yanyan.json': {'version': 1, 'author': 'yan', 'days': {
+                    day: [{'id': entry['id'], 'created_at': entry['created_at']} for entry in entries]
+                    for day, entries in yan['days'].items()
+                }},
+                'gift_index_sannan.json': {'version': 1, 'author': 'san', 'days': {
+                    day: [{'id': entry['id'], 'created_at': entry['created_at']} for entry in entries]
+                    for day, entries in san['days'].items()
+                }},
+                'gift_events.json': {'version': 1, 'events': [
+                    {'event_id': 'mock-create-yan-10', 'actor_id': 'yan', 'event_type': 'create', 'gift_id': 'mock-yan-10-new', 'gift_date': 10, 'gift_type': 'text', 'created_at': '2026-12-10T08:00:00+08:00'},
+                    {'event_id': 'mock-create-yan-11', 'actor_id': 'yan', 'event_type': 'create', 'gift_id': 'mock-yan-11-bad', 'gift_date': 11, 'gift_type': 'text', 'created_at': '2026-12-10T08:00:00+08:00'},
+                    {'event_id': 'mock-create-san-12', 'actor_id': 'san', 'event_type': 'create', 'gift_id': 'mock-san-12-any', 'gift_date': 12, 'gift_type': 'text', 'created_at': '2026-11-25T10:00:00+08:00'},
+                ], 'read_cursors': {'san': '', 'yan': ''}, 'read_event_ids': {'san': [], 'yan': []}},
+            }
+            for mock_root in (str(MOCK_DIR), str(GH_DIR)):
+                Path(mock_root, 'gifts.json').write_text(json.dumps(mock_wrapper(yan, YAN_DIGEST), ensure_ascii=False), encoding='utf-8')
+                Path(mock_root, 'sannan_gifts.json').write_text(json.dumps(mock_wrapper(san, SAN_DIGEST), ensure_ascii=False), encoding='utf-8')
+                for name, payload in indexes.items():
+                    Path(mock_root, name).write_text(json.dumps(payload), encoding='utf-8')
 
             page.evaluate('UI.syncNow()')
             page.wait_for_timeout(2500)
@@ -328,14 +351,19 @@ def main():
             page.wait_for_timeout(600)
             # 时间推进到 12月12日，检查跨日追加与三三箱
             page.clock.set_fixed_time('2026-12-12T10:00:00+08:00')
-            # 窗11（跨日追加）应被拒绝：卡片中不应出现该内容
+            # 窗11（未来日期）按 V4 规则允许 12月1—23日追加
             win11 = page.locator('.adv-win:has(small:text-is("11"))')
             win11.click()
             page.wait_for_timeout(2200)
             page.locator('.adv-front').click()
             page.wait_for_timeout(400)
-            body_txt = page.locator('.adv-body').inner_text()
-            check('D4 非当天追加被冻结规则拒绝', 'MOCK-跨日追加应被拒' not in body_txt)
+            if page.locator('.adv-accordion-tab').count():
+                page.locator('.adv-accordion-tab').last.click()
+                page.wait_for_timeout(400)
+                page.locator('.adv-envelope-seal:visible').click()
+                page.wait_for_timeout(100)
+            future_gift = page.get_by_text('MOCK-跨日追加应被拒', exact=False)
+            check('D4 12月1—23日未来日期追加被接受', future_gift.count() > 0 and future_gift.last.is_visible())
             page.locator('.adv-btn', has_text='关上').click()
             page.wait_for_timeout(600)
             # 三三箱不受冻结限制
@@ -347,7 +375,7 @@ def main():
                 page.locator('.adv-accordion-tab').last.click()
                 page.wait_for_timeout(400)
                 page.locator('.adv-envelope-seal:visible').click()
-            check('D5 三三箱不受冻结限制', 'MOCK-三三任意追加' in page.locator('.adv-body').inner_text())
+            check('D5 三三可修改5—23日自己的礼物', 'MOCK-三三任意追加' in page.locator('.adv-body').inner_text())
             page.locator('.adv-btn', has_text='关上').click()
             ctx.close()
 

@@ -289,9 +289,9 @@ def test_guide_examples(pw):
         goto(page)
         for i, layout in enumerate(layouts):
             result = page.evaluate('''layout => {
-              window.Backend.hide(25, [{type:'scrapbook', layout}], 'dessin');
+              window.Backend.hide(23, [{type:'scrapbook', layout}], 'dessin');
               const s = JSON.parse(localStorage.getItem('advent-web-save-v1'));
-              const list = s.human_gifts['25'];
+              const list = s.human_gifts['23'];
               const e = list[list.length - 1];  // 取最新追加的条目
               return e.items_v2[0].layout;
             }''', layout)
