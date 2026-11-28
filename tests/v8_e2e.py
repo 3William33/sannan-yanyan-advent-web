@@ -89,7 +89,7 @@ def test_stats(browser):
     pg.evaluate('window.Backend.sync()')
     pg.wait_for_function('window.Backend.getBoard().gift_stats.fresh === true')
     stats = pg.evaluate('window.Backend.getBoard().gift_stats')
-    builtin = pg.evaluate("import('./builtin-gifts.js?v=8.2.0').then(m => Object.values(m.BUILTIN_STATS).flat().length)")
+    builtin = pg.evaluate("import('./builtin-gifts.js?v=8.2.1').then(m => Object.values(m.BUILTIN_STATS).flat().length)")
     check('stats deduplicate IDs and union indexes', stats['yan']['total'] == builtin + 3 and stats['san']['total'] == 301, stats)
     check('stats have no per-day distribution', not any(key in stats for key in ('days', 'gifts', 'items')), list(stats))
     check('stats piles use fixed decorative DOM', pg.locator('.adv-pile-box').count() == 16, pg.locator('.adv-pile-box').count())

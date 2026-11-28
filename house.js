@@ -70,8 +70,7 @@ export function mountHouse(stage, opts) {
   pine.type = "button"; pine.setAttribute("aria-label", L.pine);
   const bells = el("button", "adv-stk adv-bells", `<span class="adv-hang"><img src="${assets.bells}" alt=""></span>`);
   bells.type = "button"; bells.setAttribute("aria-label", L.bells);
-  house.append(bells);
-  stage.append(pine, house);
+  stage.append(pine, bells, house);
 
   // 飞出来的小人和大礼物盒挂在 body 上（position:fixed，别被页面的 transform 框住）
   const ginger = el("div", "adv-fly", `<img src="${assets.ginger}" alt=""><span class="adv-flybox">${GIFT_SVG}</span>`); ginger.hidden = true;

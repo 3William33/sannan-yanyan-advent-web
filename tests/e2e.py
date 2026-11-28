@@ -346,12 +346,12 @@ def main():
                 page.locator('.adv-accordion-tab').last.click()
                 page.wait_for_timeout(400)
                 page.locator('.adv-envelope-seal:visible').click()
-            check('D3 12月1-23当天追加被接受', 'MOCK-当天新增' in page.locator('.adv-body').inner_text())
+            check('D3 12月1-25当天追加被接受', 'MOCK-当天新增' in page.locator('.adv-body').inner_text())
             page.locator('.adv-btn', has_text='关上').click()
             page.wait_for_timeout(600)
             # 时间推进到 12月12日，检查跨日追加与三三箱
             page.clock.set_fixed_time('2026-12-12T10:00:00+08:00')
-            # 窗11（未来日期）按 V4 规则允许 12月1—23日追加
+            # 窗11（未来日期）按 V4 规则允许 12月1—25日追加
             win11 = page.locator('.adv-win:has(small:text-is("11"))')
             win11.click()
             page.wait_for_timeout(2200)
@@ -363,7 +363,7 @@ def main():
                 page.locator('.adv-envelope-seal:visible').click()
                 page.wait_for_timeout(100)
             future_gift = page.get_by_text('MOCK-跨日追加应被拒', exact=False)
-            check('D4 12月1—23日未来日期追加被接受', future_gift.count() > 0 and future_gift.last.is_visible())
+            check('D4 12月1—25日未来日期追加被接受', future_gift.count() > 0 and future_gift.last.is_visible())
             page.locator('.adv-btn', has_text='关上').click()
             page.wait_for_timeout(600)
             # 三三箱不受冻结限制

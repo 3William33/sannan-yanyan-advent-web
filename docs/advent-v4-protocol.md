@@ -23,8 +23,8 @@ V4 保持 `protocol: advent-gifts-v3.2`、北京时间解锁、XOR+Base64 payloa
 
 - 默认写入身份为三三，使用 `sannan_gifts.json`、`gift_index_sannan.json` 与 `assets/sannan/`。
 - 砚砚通过 `?writer=yan` 选择，使用 `gifts.json`、`gift_index_yanyan.json` 与 `assets/yanyan/`。该参数不改变顶栏“偷看记名”。
-- 11 月 30 日前可整理自己尚未封存的 1–23 日礼物；12 月 1–23 日可追加或修改当天及未来日期；过去日期自动锁定。
-- 12 月 24/25 日保留特别结局；12 月 26 日起普通礼物和完整档案只读。
+- 12 月 26 日前（含筹备期和 12 月 1–25 日），双方可新增、修改或删除自己尚未正式封存的 1–25 日普通礼物，包括已过去的日期。
+- 12 月 24/25 日的内置特别结局保持只读；12 月 26 日起普通礼物和完整档案只读。
 - 修改与删除在实际写入 API 中再次校验作者归属、日期和封存状态，不能修改对方礼物。
 
 草稿使用浏览器本地独立命名空间：新礼物为 `advent-v4-draft:<writer>:<day>`，编辑为 `advent-v4-edit:<writer>:<gift-id>`，不参与正式同步。

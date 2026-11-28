@@ -9,7 +9,7 @@
  *   - XOR + Base64 混淆 payload，密钥摘要见 config.js
  *   - gifts.json / sannan_gifts.json 双方礼物，gift_index_*.json 无内容索引
  *   - peek_log.json 双向偷看事件，按事件 ID 去重合并
- *   - 砚砚箱 2026-12-01 定稿快照（freeze）+ 12月1—23日当天追加限制
+ *   - 砚砚箱 2026-12-01 定稿快照（freeze）+ 12月26日前自己未封存1—25日礼物可整理
  *
  * 本地状态保存在 localStorage，上传媒体暂存在 IndexedDB，发布时写入
  * 数据仓库 assets/sannan/<sha256>.<ext> 并改写为 raw URL。
@@ -20,8 +20,8 @@
  *   - 解锁规则是客户端交互层限制（与原版本机运行一致），并非服务器端安全边界
  */
 
-import { CONFIG, UPLOAD_MIME_EXT, REMOTE_MEDIA_EXTENSIONS, MAX_UPLOAD_BYTES } from './config.js?v=8.2.0';
-import { BUILTIN_DAYS, BUILTIN_STATS } from './builtin-gifts.js?v=8.2.0';
+import { CONFIG, UPLOAD_MIME_EXT, REMOTE_MEDIA_EXTENSIONS, MAX_UPLOAD_BYTES } from './config.js?v=8.2.1';
+import { BUILTIN_DAYS, BUILTIN_STATS } from './builtin-gifts.js?v=8.2.1';
 
 /* ── 编解码工具（与 advent-gifts-v3.2 协议一致）────────────────────── */
 
@@ -167,9 +167,9 @@ function isArchivePhase(now = new Date()) {
 function calendarRules(now = new Date()) {
   const date = shanghaiCalendar(now);
   if (isArchivePhase(now)) return { phase: 'archive', canCreate: false, minDay: null, maxDay: null, label: '完整档案 · 只读' };
-  if (isPrepPeriod(now)) return { phase: 'prep', canCreate: true, minDay: 1, maxDay: 23, label: '正式封箱前 · 可整理 1—23 日礼物' };
-  if (date.year === CONFIG.YEAR && date.month === 12 && date.day <= 23) {
-    return { phase: 'advent', canCreate: true, minDay: date.day, maxDay: 23, label: `可追加与修改 ${date.day}—23 日礼物` };
+  if (isPrepPeriod(now)) return { phase: 'prep', canCreate: true, minDay: 1, maxDay: 25, label: '正式封箱前 · 可整理 1—25 日礼物' };
+  if (date.year === CONFIG.YEAR && date.month === 12 && date.day <= 25) {
+    return { phase: date.day <= 23 ? 'advent' : 'ending', canCreate: true, minDay: 1, maxDay: 25, label: '正式封箱前 · 可整理自己尚未封存的 1—25 日礼物' };
   }
   return { phase: 'ending', canCreate: false, minDay: null, maxDay: null, label: '圣诞特别结局 · 普通礼物只读' };
 }
@@ -180,11 +180,10 @@ function canCreateGift(day, now = new Date()) {
 }
 
 function canMutateGift(day, entry, now = new Date()) {
-  if (!Number.isInteger(day) || day < 1 || day > 23) return { ok: false, reason: '24、25 日保留圣诞特别结局，普通礼物不可改写' };
+  if (!Number.isInteger(day) || day < 1 || day > 25) return { ok: false, reason: '礼物日期必须在 1—25 日之间' };
   if (isArchivePhase(now)) return { ok: false, reason: '12月26日起完整档案只读' };
   if (!entry) return { ok: false, reason: '找不到这份礼物' };
   if (entry.sealed === true) return { ok: false, reason: '礼物已经正式封存' };
-  if (!isPrepPeriod(now) && day < shanghaiCalendar(now).day) return { ok: false, reason: '过去日期的礼物已经自动锁定' };
   return { ok: true, reason: '' };
 }
 

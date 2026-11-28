@@ -8,7 +8,7 @@
  * - 触摸优先、分类浏览、搜索、配色筛选、最近/收藏、同图案快速切色。
  * - 只使用 raw.githubusercontent.com 白名单 URL，绝不加载第三方图片。
  */
-import { CONFIG } from './config.js?v=8.2.0';
+import { CONFIG } from './config.js?v=8.2.1';
 
 const INDEX_PATH = 'assets/stickers/sticker_index.json';
 const LS_FAV = 'advent-sticker-favs';

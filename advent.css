@@ -47,11 +47,11 @@ body.adv-night, .adv-page.dusk {
 .adv-stk img { display: block; width: 100%; max-width: none; height: auto; pointer-events: none; filter: drop-shadow(0 4px 4px rgba(40, 20, 10, .28)); }
 .adv-stk:focus-visible { outline: 2px solid var(--adv-gold); outline-offset: 3px; border-radius: 8px; }
 .adv-hang { position: absolute; inset: 0; transform-origin: 50% 0; }
-.adv-pine { left: -2px; top: -104px; width: 30px; height: 120px; }
+.adv-pine { left: -2px; top: 0; width: 30px; height: 120px; }
 .adv-pine .adv-hang { rotate: 9deg; animation: adv-idle 6.5s ease-in-out infinite; }
 .adv-pine .adv-string { position: absolute; left: 50%; top: 0; width: 1px; height: 62px; background: linear-gradient(var(--adv-muted), #9a8a74); }
 .adv-pine img { position: absolute; top: 58px; left: 0; }
-.adv-bells { right: -14px; top: -26px; width: 70px; height: 80px; }
+.adv-bells { right: -14px; top: 16px; width: 70px; height: 80px; }
 .adv-bells .adv-hang { rotate: -16deg; transform-origin: 62% 4%; animation: adv-idle2 7.5s ease-in-out infinite; }
 @keyframes adv-idle { 0%, 100% { rotate: 9deg } 50% { rotate: 4deg } }
 @keyframes adv-idle2 { 0%, 100% { rotate: -16deg } 50% { rotate: -11deg } }
@@ -463,8 +463,8 @@ body.adv-night, .adv-page.dusk {
   .adv-stage { grid-column: 2; grid-row: 1 / -1; width: auto; height: min(calc(100dvh - 40px), 880px); }
   .adv-house { width: auto; height: 100%; aspect-ratio: 1024 / 1536; }
   /* 横屏高度紧张：屋檐装饰收一收，别把顶部挤出屏幕 */
-  .adv-pine { top: -70px; scale: .82; transform-origin: 50% 100%; }
-  .adv-bells { top: -8px; scale: .88; transform-origin: 70% 0; }
+  .adv-pine { top: 0; scale: .82; transform-origin: 50% 100%; }
+  .adv-bells { top: 16px; scale: .88; transform-origin: 70% 0; }
   /* 宽屏卡片放大一点，阅读/编辑更从容；浮层仍居中滚动 */
   .adv-cardbox { width: min(420px, 92vw); }
   .adv-sheet { width: min(440px, 94vw); }
@@ -1572,15 +1572,14 @@ body.adv-night select, body.adv-night input[type=checkbox], body.adv-night input
 /* V4 unified layout, local stacking contexts and archive workspaces. */
 .adv-page { overflow-x: hidden; font-size: 16px; }
 .adv-stage { isolation: isolate; overflow: clip; overflow-clip-margin: 110px 24px 0; }
-.adv-house { isolation: isolate; container-type: inline-size; }
+.adv-house { isolation: isolate; z-index: 1; container-type: inline-size; }
 .adv-base { z-index: 0; }
 .adv-veil, .adv-litall { z-index: 1; }
 .adv-door { z-index: 2; }
 .adv-snow { z-index: 2; }
 .adv-win { z-index: 3; }
 .adv-crab { z-index: 4; }
-.adv-house .adv-stk { z-index: 6; }
-.adv-stage > .adv-stk { z-index: 7; }
+.adv-stage > .adv-stk { z-index: 3; }
 .adv-in small { font-size: clamp(8px, 3.4cqw, 18px); }
 .adv-plaque { font-size: clamp(9px, 3.6cqw, 19px); }
 .adv-gift-pile { width: 100%; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
@@ -1648,6 +1647,10 @@ body.adv-night select, body.adv-night input[type=checkbox], body.adv-night input
 .adv-post-event time { color: var(--adv-muted); font-size: 12px; }
 .adv-post-event span { overflow-wrap: anywhere; color: var(--adv-muted); }
 
+@media (orientation: portrait) and (max-width: 900px) {
+  .adv-stage { margin-top: 16px; }
+}
+
 @media (min-width: 760px) and (orientation: landscape) {
   .adv-wrap {
     max-width: 1320px; display: grid; grid-template-columns: minmax(0,1fr) clamp(480px,36vw,540px);
@@ -1665,8 +1668,8 @@ body.adv-night select, body.adv-night input[type=checkbox], body.adv-night input
   .adv-desk { grid-area: desk; grid-column: auto; grid-row: auto; margin: 0; padding: 18px; font-size: 15px; }
   .adv-peeks { grid-area: peeks; }
   .adv-sync-line { grid-area: sync; }
-  .adv-pine { top: -80px; }
-  .adv-bells { top: -10px; right: -4px; }
+  .adv-pine { top: 0; }
+  .adv-bells { top: 16px; right: -4px; }
   .adv-desk-label { font-size: 20px; }
   .adv-desk-date, .adv-desk-calendar small { font-size: 12px; }
   .adv-desk-calendar-day { font-size: 38px; }

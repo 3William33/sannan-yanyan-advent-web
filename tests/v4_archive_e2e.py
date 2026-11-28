@@ -82,19 +82,25 @@ def main():
               const beforeEvents = Backend.getBoard().post_office.events.length;
               const first = Backend.hide(20, [{type:'text',text:'MOCK-OWN-20'}], 'lettre', {title:'MOCK-我的二十日礼物'});
               const second = Backend.hide(20, [{type:'text',text:'MOCK-OWN-20-B'}], 'lettre', {title:'MOCK-同日第二份'});
-              let pastRejected = false, foreignRejected = false;
-              try { Backend.hide(4, [{type:'text',text:'bad'}]); } catch { pastRejected = true; }
+              let invalidRejected = false, foreignRejected = false;
+              try { Backend.hide(26, [{type:'text',text:'bad'}]); } catch { invalidRejected = true; }
               try { Backend.updateGift(3, 'mock-yan-3-a', [{type:'text',text:'bad'}]); } catch { foreignRejected = true; }
+              const firstDay = Backend.hide(1, [{type:'text',text:'MOCK-OWN-1'}], 'lettre', {title:'MOCK-一日礼物'});
+              const lastDay = Backend.hide(25, [{type:'text',text:'MOCK-OWN-25'}], 'lettre', {title:'MOCK-二十五日礼物'});
+              Backend.updateGift(1, firstDay.id, [{type:'text',text:'MOCK-OWN-1-EDITED'}], {title:'MOCK-一日已编辑'});
+              Backend.updateGift(25, lastDay.id, [{type:'text',text:'MOCK-OWN-25-EDITED'}], {title:'MOCK-二十五日已编辑'});
+              Backend.deleteGift(1, firstDay.id);
+              Backend.deleteGift(25, lastDay.id);
               Backend.updateGift(20, first.id, [{type:'text',text:'MOCK-OWN-20-EDITED'}], {title:'MOCK-已编辑标题'});
               Backend.deleteGift(20, second.id);
-              return {first:first.id, second:second.id, pastRejected, foreignRejected, eventDelta:Backend.getBoard().post_office.events.length-beforeEvents};
+              return {first:first.id, second:second.id, invalidRejected, foreignRejected, eventDelta:Backend.getBoard().post_office.events.length-beforeEvents};
             }''')
-            check('V4-A4 过去日期新增被写入层拒绝', created['pastRejected'])
+            check('V4-A4 非法日期26日新增被写入层拒绝', created['invalidRejected'])
             check('V4-A5 对方礼物修改被写入层拒绝', created['foreignRejected'])
             check('V4-A6 同日多份不互相覆盖', page.evaluate('Backend.getBoard().collection.days[19].gifts.filter(g=>g.own).length') == 1)
             event_types = page.evaluate('Backend.getBoard().post_office.events.map(e=>e.event_type)')
             check('V4-A7 成功操作生成对应事件', all(event_types.count(kind) >= 1 for kind in ['create','update','delete']), str(event_types))
-            check('V4-A7b 失败操作不生成成功事件', created['eventDelta'] == 4, str(created['eventDelta']))
+            check('V4-A7b 封箱前1/25日可增改删且失败操作不生成成功事件', created['eventDelta'] == 10, str(created['eventDelta']))
             check('V4-A8 删除礼物已从权威列表移除', created['second'] not in page.evaluate('Backend.getBoard().collection.days.flatMap(d=>d.gifts.map(g=>g.id))'))
 
             page.evaluate('UI.openCollection()')
@@ -129,7 +135,7 @@ def main():
             page.evaluate('UI.openPostOffice()')
             check('V4-A14 邮局统计来自真实事件', page.locator('.adv-post-summary').get_by_text('近 7 天新增', exact=False).count() == 1)
             mixed_time_order = page.evaluate('''async () => {
-              const {mergeGiftEvents} = await import('./backend.js?v=8.2.0');
+              const {mergeGiftEvents} = await import('./backend.js?v=8.2.1');
               const base = {actor_id:'yan', actor_name:'砚砚', event_type:'create', gift_id:'mock-time', gift_date:20, gift_type:'text', title:'MOCK'};
               return mergeGiftEvents([
                 {...base, event_id:'offset-earlier', created_at:'2026-12-05T09:00:00+08:00'},
@@ -169,14 +175,25 @@ def main():
             check('V4-A21 活动文件不含正文附件', 'MOCK-OWN-20-EDITED' not in event_text and 'MOCK-SECRET-20' not in event_text)
             check('V4-A22 发布返回封存事件', page.evaluate("Backend.getBoard().post_office.events.some(e=>e.event_type==='seal')"))
 
+            page.clock.set_fixed_time('2026-12-24T10:00:00+08:00')
+            ending = page.evaluate('''() => {
+              const first = Backend.hide(1,[{type:'text',text:'MOCK-ENDING-1'}],'lettre',{title:'MOCK 圣诞前夕一日礼物'});
+              const last = Backend.hide(25,[{type:'text',text:'MOCK-ENDING-25'}],'lettre',{title:'MOCK 圣诞前夕二十五日礼物'});
+              Backend.updateGift(1, first.id, [{type:'text',text:'MOCK-ENDING-1-EDITED'}]);
+              let invalid = false;
+              try { Backend.hide(26,[{type:'text',text:'bad'}]); } catch { invalid = true; }
+              return {first:first.id,last:last.id,invalid,rules:Backend.calendarRules()};
+            }''')
+            check('V4-A22b 12月24日仍可整理自己未封存的过去和25日礼物', ending['invalid'] and ending['rules']['canCreate'] and ending['rules']['maxDay'] == 25, str(ending['rules']))
+
             page.clock.set_fixed_time('2026-12-26T10:00:00+08:00')
-            archived = page.evaluate('''() => {
+            archived = page.evaluate('''endingId => {
               let create=false, update=false, remove=false;
               try { Backend.hide(1,[{type:'text',text:'bad'}]); } catch { create=true; }
-              try { Backend.updateGift(20, document.querySelector('#sanGiftCount') && Backend.getBoard().collection.days[19].gifts.find(g=>g.own).id, [{type:'text',text:'bad'}]); } catch { update=true; }
-              try { Backend.deleteGift(20, Backend.getBoard().collection.days[19].gifts.find(g=>g.own).id); } catch { remove=true; }
+              try { Backend.updateGift(1, endingId, [{type:'text',text:'bad'}]); } catch { update=true; }
+              try { Backend.deleteGift(1, endingId); } catch { remove=true; }
               return {create,update,remove,rules:Backend.calendarRules()};
-            }''')
+            }''', ending['first'])
             check('V4-A23 12月26日后新增修改删除全部只读', all(archived[key] for key in ['create','update','remove']), str(archived))
             check('V4-A24 归档阶段仍保留完整时间线', page.evaluate('Backend.getBoard().post_office.events.length') > 0)
 
@@ -197,6 +214,18 @@ def main():
             yan_page.get_by_role('button', name='取消', exact=True).click()
             yan_created = yan_page.evaluate('''() => {const gift=Backend.hide(20,[{type:'text',text:'MOCK-YAN-OWN-SECRET'}],'lettre',{title:'MOCK 砚砚自己的礼物'});return {id:gift.id,read:Backend.readGiftContent(20,gift.id).human_entries[0].text};}''')
             check('V4-D6 砚砚可读自己未解锁礼物', yan_created['read'] == 'MOCK-YAN-OWN-SECRET')
+            yan_edges = yan_page.evaluate('''() => {
+              const first = Backend.hide(1,[{type:'text',text:'MOCK-YAN-EDGE-1'}],'lettre',{title:'MOCK 砚砚一日礼物'});
+              const last = Backend.hide(25,[{type:'text',text:'MOCK-YAN-EDGE-25'}],'lettre',{title:'MOCK 砚砚二十五日礼物'});
+              Backend.updateGift(1, first.id, [{type:'text',text:'MOCK-YAN-EDGE-1-EDITED'}]);
+              Backend.updateGift(25, last.id, [{type:'text',text:'MOCK-YAN-EDGE-25-EDITED'}]);
+              Backend.deleteGift(1, first.id);
+              Backend.deleteGift(25, last.id);
+              let invalid = false;
+              try { Backend.hide(26,[{type:'text',text:'bad'}]); } catch { invalid = true; }
+              return {invalid};
+            }''')
+            check('V4-D6b 砚砚同样可增改删1/25日未封存礼物', yan_edges['invalid'])
             yan_page.evaluate('''async () => {Backend.setPat('test-token');await Backend.publish();Backend.markEventsRead(true);await Backend.publish();}''')
             yan_page.evaluate('Backend.sync()')
             check('V4-D7 砚砚礼物发布到独立仓库文件', yan_page.evaluate("Backend.getBoard().collection.days[19].gifts.some(g=>g.id==='"+yan_created['id']+"'&&g.sealed)"))
@@ -214,6 +243,15 @@ def main():
                 layout = page.evaluate('''() => {const sheet=document.querySelector('.adv-archive-sheet').getBoundingClientRect();const grid=getComputedStyle(document.querySelector('.adv-archive-layout'));return {overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth,sheet:{left:sheet.left,right:sheet.right,width:sheet.width,height:sheet.height},display:grid.display,columns:grid.gridTemplateColumns,viewport:{width:innerWidth,height:innerHeight}};}''')
                 layout_results.append((width,height,layout))
                 page.get_by_role('button', name='关闭收藏馆').click()
+            ornaments = page.evaluate('''() => {
+              const pine = document.querySelector('.adv-pine');
+              const bells = document.querySelector('.adv-bells');
+              const house = document.querySelector('.adv-house');
+              return {direct:pine.parentElement.classList.contains('adv-stage') && bells.parentElement.classList.contains('adv-stage'), z: [Number(getComputedStyle(pine).zIndex),Number(getComputedStyle(bells).zIndex),Number(getComputedStyle(house).zIndex)]};
+            }''')
+            check('V4-A24b 松果与铃铛为舞台同级且位于房屋上层', ornaments['direct'] and ornaments['z'][0] > ornaments['z'][2] and ornaments['z'][1] > ornaments['z'][2], str(ornaments))
+            page.locator('.adv-pine').click(); page.locator('.adv-bells').click()
+            check('V4-A24c 松果与铃铛连续点击无脚本错误', not errors, str(errors))
             check('V4-A25 五种视口收藏馆无横向溢出', all(not item[2]['overflow'] and item[2]['sheet']['left'] >= 0 and item[2]['sheet']['right'] <= item[0] + 1 and item[2]['sheet']['height'] <= item[1] * .89 for item in layout_results), str(layout_results))
             check('V4-A26 桌面双栏与移动单栏响应式', layout_results[0][2]['display'] == 'grid' and layout_results[0][2]['columns'].count(' ') >= 1 and layout_results[-1][2]['display'] == 'block', str([(item[0],item[2]['display'],item[2]['columns']) for item in layout_results]))
             page.set_viewport_size({'width':390,'height':844})
